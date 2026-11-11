@@ -145,7 +145,7 @@ export async function executePayout(ctx, id) {
     res = await ctx.payouts.createPayout({ payout_id: p.id, amount_minor: p.net_minor, method: p.method, destination: kyc, name: user.name });
   } catch (e) {
     await atomic(ctx, () => auditStmts(ctx, [{ action: 'payout.execute_failed', target: `payout:${id}`, meta: { error: String(e.message).slice(0, 200) } }]));
-    throw e;
+    throw e instanceof HttpError ? e : new HttpError(502, 'provider_error', 'the payout provider call failed; the payout stays approved and can be retried');
   }
   await atomic(ctx, async () => [
     { sql: "UPDATE payouts SET status='processing', provider=?, provider_ref=? WHERE id=? AND status='approved'", params: [res.provider, res.provider_ref, id] },

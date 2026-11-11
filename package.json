@@ -1,0 +1,13 @@
+{
+  "name": "partner-circle",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Partner Circle: standalone growth-partner portal and integration API (Cloudflare Pages Functions + D1)",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "test": "node --test test/",
+    "build": "node scripts/build-check.mjs"
+  }
+}

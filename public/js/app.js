@@ -12,11 +12,18 @@
       var v = attrs[k];
       if (k === 'class') el.className = v;
       else if (k === 'on') Object.keys(v).forEach(function (ev) { el.addEventListener(ev, v[ev]); });
+      else if (k === 'style') setStyle(el, v);
       else if (v === true) el.setAttribute(k, '');
       else if (v !== false && v != null) el.setAttribute(k, v);
     });
     for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
     return el;
+  }
+  // The deployed CSP is style-src 'self': a style="" attribute (or setAttribute('style')) is blocked, but assigning el.style.x is allowed.
+  function setStyle(el, v) {
+    if (typeof v === 'string') {
+      v.split(';').forEach(function (d) { var i = d.indexOf(':'); if (i > 0) el.style.setProperty(d.slice(0, i).trim(), d.slice(i + 1).trim()); });
+    } else Object.keys(v).forEach(function (n) { el.style[n] = v[n]; });
   }
   function add(el, c) {
     if (c == null || c === false) return;
@@ -59,7 +66,7 @@
 
   // ---- shell -----------------------------------------------------------------------------------------------
   var USER_TABS = { dash: 'Dashboard', team: 'Team', links: 'Links and codes', earn: 'Earnings', profile: 'My details', logs: 'Logs' };
-  var ADMIN_TABS = { queue: 'Approvals', users: 'People', policy: 'Policy and sites', schemes: 'Schemes', keys: 'API keys', audit: 'Action log', ai: 'AI actions' };
+  var ADMIN_TABS = { queue: 'Approvals', payouts: 'Payouts', users: 'People', policy: 'Policy and sites', schemes: 'Schemes', keys: 'API keys', audit: 'Action log', ai: 'AI actions' };
   var ROLE_NAME = { refer: 'Refer and Earn', partner: 'Growth Partner', exec: 'Sales Executive', leader: 'Sales Team Leader', manager: 'Sales Manager', owner: 'Owner', ai: 'AI master' };
 
   function tabs(map, cur) {
@@ -96,7 +103,7 @@
   // ---- sign in / register ----------------------------------------------------------------------------------
   VIEWS.login = function () {
     var input = E('input', { id: 'k', placeholder: 'pck_…', autocomplete: 'off', spellcheck: 'false' });
-    var remember = E('input', { type: 'checkbox', style: 'width:auto' });
+    var remember = E('input', { type: 'checkbox', class: 'auto' });
     return E('div', null,
       E('h1', null, 'Welcome to Partner Circle'),
       E('p', null, 'One place for every site we run: share, earn, grow.'),
@@ -149,7 +156,7 @@
       return E('div', null, nodes);
     });
   };
-  function bar(p) { return E('div', { class: 'bar' }, E('i', { class: p >= 80 ? 'g' : p >= 40 ? 'a' : 'r', style: 'width:' + p + '%' })); }
+  function bar(p) { return E('div', { class: 'bar' }, E('i', { class: p >= 80 ? 'g' : p >= 40 ? 'a' : 'r', style: { width: Math.max(0, Math.min(100, Number(p) || 0)) + '%' } })); }
 
   VIEWS.team = function () {
     return api('GET', '/v1/me/team').then(function (r) {
@@ -234,22 +241,81 @@
 
   // ---- owner / AI views ------------------------------------------------------------------------------------
   var isOwner = function () { return state.who.kind === 'owner'; };
+  var ownerOnly = function (btn) { return isOwner() ? btn : E('span', { class: 'mut' }, 'owner only'); };
+  var failToast = function (e) { toast(e.message, true); };
+  var btn = function (label, cls, fn) { return E('button', { class: 'btn ' + cls, on: { click: fn } }, label); };
+  var post = function (path, body, ok, ask) {
+    return btn(ok.label, ok.cls || '', function () { if (ask && !window.confirm(ask)) return; act(function () { return api('POST', path, body); }, ok.done)(); });
+  };
+
+  // masked KYC for the owner to recognise; the full values only on a click, which is written to the action log
+  function kycCell(k) {
+    var d = k.details || {};
+    var line = k.country === 'IN' ? ['PAN ' + d.pan, 'UPI ' + d.upi_id] : ['Tax ID ' + d.tax_id, (d.bank_name || '') + ' ' + (d.bank_account || ''), 'IFSC/SWIFT ' + d.bank_ifsc_swift];
+    var full = E('div', { class: 'code' });
+    full.hidden = true;
+    var show = isOwner() ? E('button', { class: 'btn ghost', on: { click: function () {
+      api('GET', '/v1/admin/users/' + k.user_id + '/kyc').then(function (x) {
+        full.hidden = false;
+        full.textContent = k.country === 'IN' ? 'PAN ' + x.pan + ' · UPI ' + x.upi_id : 'Tax ID ' + x.tax_id + ' · ' + x.bank_name + ' ' + x.bank_account + ' · ' + x.bank_ifsc_swift;
+      }, failToast);
+    } } }, 'Show full details (logged)') : null;
+    return E('div', null, E('div', null, line.join(' · ')), full, show);
+  }
 
   VIEWS.queue = function () {
     return Promise.all([api('GET', '/v1/admin/queue'), api('GET', '/v1/admin/summary')]).then(function (r) {
       var q = r[0], s = r[1];
-      var ownerOnly = function (btn) { return isOwner() ? btn : E('span', { class: 'mut' }, 'owner only'); };
+      var tile = function (big, label) { return card(E('div', { class: 'big' }, big), E('span', { class: 'mut' }, label)); };
       return E('div', null, E('h1', null, 'Approvals'),
-        E('div', { class: 'grid' }, card(E('div', { class: 'big' }, String(q.partners.length)), E('span', { class: 'mut' }, 'people to approve')), card(E('div', { class: 'big' }, String(q.payouts.length)), E('span', { class: 'mut' }, 'payouts waiting')),
-          card(E('div', { class: 'big' }, money(s.owed_minor)), E('span', { class: 'mut' }, 'owed to partners (ledger)')), card(E('div', { class: 'big' }, String(s.flagged_refunds)), E('span', { class: 'mut' }, 'refunds after payout (flagged)'))),
+        s.payout_mode === 'mock' ? E('div', { class: 'note' }, 'Payouts are in MOCK mode: no real money moves. Live payouts need your RazorpayX keys and PAYOUT_MODE=live.') : E('div', { class: 'note' }, 'Payout mode: ' + s.payout_mode + '. Approving a payout sends it to RazorpayX.'),
+        q.tds_confirmed ? null : E('div', { class: 'note' }, 'TDS rate is not confirmed by a CA yet. Payouts carry the TDS % set under Policy and sites (now a placeholder).'),
+        E('div', { class: 'grid' }, tile(String(q.partners.length), 'people to approve'), tile(String(q.payouts.length), 'payouts waiting'),
+          tile(money(s.owed_minor), 'owed to partners (ledger)'), tile(String(s.open_claims), 'claims on hold')),
+        s.flagged_refunds || s.refunds_without_usage_proof ? E('div', { class: 'note' }, s.flagged_refunds + ' refund(s) came after the payout was sent (not clawed back). ' + s.refunds_without_usage_proof + ' refund(s) have no usage proof from the site.') : null,
         E('h2', null, 'People'), table(['Name', 'Role', 'Country', 'Added', ''], q.partners.map(function (u) { return [u.name, ROLE_NAME[u.role], u.country, day(u.created_at),
-          ownerOnly(E('button', { class: 'btn', on: { click: act(function () { return api('POST', '/v1/admin/users/' + u.id + '/approve'); }, 'Approved') } }, 'Approve'))]; })),
-        E('h2', null, 'Payout details to check'), table(['Name', 'Country', 'Submitted', ''], q.kyc.map(function (k) { return [k.name, k.country, day(k.submitted_at),
-          ownerOnly(E('span', null, E('button', { class: 'btn', on: { click: act(function () { return api('POST', '/v1/admin/users/' + k.user_id + '/kyc/review', { approve: true }); }, 'Verified') } }, 'Verify'), ' ',
-            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/admin/users/' + k.user_id + '/kyc/review', { approve: false, note: 'rejected in console' }); }, 'Rejected') } }, 'Reject')))]; })),
-        E('h2', null, 'Payouts'), table(['Partner', 'Gross', 'TDS', 'To pay', 'Flags', ''], q.payouts.map(function (p) { return [p.name, money(p.gross_minor), money(p.tds_minor), money(p.net_minor), p.flagged_refunds ? pill(p.flagged_refunds + ' refunded after sale', 'r') : '',
-          ownerOnly(E('span', null, E('button', { class: 'btn', on: { click: act(function () { return api('POST', '/v1/admin/payouts/' + p.id + '/approve'); }, 'Approved and sent to the payout provider') } }, 'Approve'), ' ',
-            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/admin/payouts/' + p.id + '/reject', { note: 'rejected in console' }); }, 'Rejected') } }, 'Reject')))]; })));
+          ownerOnly(post('/v1/admin/users/' + u.id + '/approve', undefined, { label: 'Approve', done: 'Approved' }))]; })),
+        E('h2', null, 'Payout details to check'), table(['Name', 'Details', 'Submitted', ''], q.kyc.map(function (k) { return [k.name, kycCell(k), day(k.submitted_at),
+          ownerOnly(E('span', null, post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: true }, { label: 'Verify', done: 'Verified' }), ' ',
+            post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: false, note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' })))]; })),
+        E('h2', null, 'Payouts waiting'), table(['Partner', 'Pay to', 'Gross', 'TDS', 'To pay', 'Flags', ''], q.payouts.map(function (p) { return [p.name, (p.method === 'upi' ? 'UPI ' : 'Bank ') + (p.destination_masked || '-'), money(p.gross_minor), money(p.tds_minor), money(p.net_minor),
+          p.flagged_refunds ? pill(p.flagged_refunds + ' refunded after sale', 'r') : '',
+          ownerOnly(E('span', null, post('/v1/admin/payouts/' + p.id + '/approve', undefined, { label: 'Approve', done: 'Approved and sent to the payout provider' }), ' ',
+            post('/v1/admin/payouts/' + p.id + '/reject', { note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' })))]; })),
+        E('h2', null, 'Claims on hold'), table(['Partner', 'Product', 'Order', 'Amount', 'Since', ''], q.claims.map(function (c) { return [c.name || '-', c.site_id, c.order_id, money(c.net_minor), day(c.disputed_at),
+          ownerOnly(E('span', null, post('/v1/admin/sales/' + c.id + '/claim', { action: 'won', note: 'cleared in console' }, { label: 'Claim cleared', done: 'Released' }), ' ',
+            post('/v1/admin/sales/' + c.id + '/claim', { action: 'lost', note: 'lost, refunded in console' }, { label: 'Refund it', cls: 'ghost', done: 'Refunded' }, 'Refund this sale and void its commission?')))]; })));
+    });
+  };
+
+  // every payout in every state, with the action that state allows (so nothing can get stuck without a button)
+  function payoutActions(p, mode) {
+    if (!isOwner()) return E('span', { class: 'mut' }, 'owner only');
+    var base = '/v1/admin/payouts/' + p.id;
+    if (p.status === 'pending_approval') return E('span', null, post(base + '/approve', undefined, { label: 'Approve', done: 'Approved and sent' }), ' ', post(base + '/reject', { note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' }));
+    if (p.status === 'approved') return E('span', null, post(base + '/execute', undefined, { label: 'Send again', done: 'Sent to the provider' }), ' ', post(base + '/reject', { note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' }));
+    if (p.status === 'processing' && p.provider === 'manual') {
+      var ref = E('input', { placeholder: 'bank reference / UTR' });
+      var where = E('div', { class: 'code' });
+      where.hidden = true;
+      return E('div', null, btn('Where to pay (logged)', 'ghost', function () {
+        api('GET', base + '/destination').then(function (x) { where.hidden = false; var d = x.destination; where.textContent = 'Pay ' + money(x.net_minor) + ' to ' + d.name + ' · ' + d.bank_name + ' · A/c ' + d.bank_account + ' · ' + d.bank_ifsc_swift; }, failToast);
+      }), where, ref,
+      btn('Mark paid', '', function () { act(function () { return api('POST', base + '/mark-paid', { reference: ref.value }); }, 'Recorded as paid')(); }), ' ',
+      post(base + '/mark-failed', { reason: 'transfer failed' }, { label: 'Transfer failed', cls: 'ghost', done: 'Released back to the partner' }, 'The transfer did not happen? The money goes back to the partner balance.'));
+    }
+    if (p.status === 'processing') {
+      return E('span', null, mode === 'mock' ? post(base + '/mock-settle', undefined, { label: 'Mock settle', cls: 'alt', done: 'Mock-settled' }) : pill('waiting for the provider', 'o'), ' ',
+        post(base + '/mark-failed', { reason: 'marked failed in console' }, { label: 'Mark failed', cls: 'ghost', done: 'Released back to the partner' }, 'Mark this payout failed and return the money to the partner balance?'));
+    }
+    return p.reversed_at ? pill('reversed by provider', 'r') : '';
+  }
+  VIEWS.payouts = function () {
+    return Promise.all([api('GET', '/v1/admin/payouts'), api('GET', '/v1/admin/summary')]).then(function (r) {
+      var mode = r[1].payout_mode;
+      return E('div', null, E('h1', null, 'Payouts'), E('p', { class: 'mut' }, 'Payout mode: ' + mode + '. Every payout, newest first.'),
+        table(['When', 'Partner', 'Pay to', 'To pay', 'Status', 'Ref', 'Action'], r[0].payouts.map(function (p) { return [when(p.created_at), p.name || p.user_id, (p.method === 'upi' ? 'UPI ' : 'Bank ') + (p.destination_masked || '-'), money(p.net_minor),
+          pill(p.status.replace('_', ' ') + (p.reversed_at ? ' (reversed)' : ''), p.status === 'paid' ? '' : p.status === 'failed' || p.status === 'rejected' ? 'r' : 'o'), p.paid_ref || p.provider_ref || '', payoutActions(p, mode)]; })));
     });
   };
 
@@ -258,16 +324,28 @@
       var role = E('select', null, ['manager', 'leader', 'exec', 'partner'].map(function (x) { return E('option', { value: x }, ROLE_NAME[x]); }));
       var name = E('input'), email = E('input', { type: 'email' }), phone = E('input'), parent = E('input', { placeholder: 'reports to (user id, optional)' });
       var shown = E('div');
+      var pid = E('input', { placeholder: 'person id (click Move on a row)' });
+      var prole = E('select', null, E('option', { value: '' }, 'keep role'), ['manager', 'leader', 'exec', 'partner', 'refer'].map(function (x) { return E('option', { value: x }, ROLE_NAME[x]); }));
+      var pparent = E('input', { placeholder: 'new boss id (blank = keep, "none" = nobody)' });
       return E('div', null, E('h1', null, 'People'),
         card(E('b', null, 'Add staff'), E('p', { class: 'mut' }, isOwner() ? 'Created active, with a login key shown once.' : 'Created as pending: the owner approves.'),
           field('Role', role), field('Name', name), field('E-mail', email), field('Mobile', phone), field('Reports to', parent),
           E('button', { class: 'btn', on: { click: function () {
             api('POST', '/v1/admin/users', { role: role.value, name: name.value, email: email.value, phone: phone.value, parent_id: parent.value || undefined }).then(function (x) {
               shown.textContent = ''; if (x.api_key) shown.appendChild(card(E('b', null, 'Login key (shown once)'), E('div', { class: 'code' }, x.api_key)));
-              toast('Added'); }, function (e) { toast(e.message, true); });
+              toast('Added'); }, failToast);
           } } }, 'Add'), shown),
-        table(['Name', 'Role', 'Status', 'KYC', 'ID', ''], r.users.map(function (u) { return [u.name, ROLE_NAME[u.role], pill(u.status, u.status === 'active' ? '' : 'o'), u.kyc_status, E('span', { class: 'code' }, u.id),
-          u.status === 'active' ? E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/admin/users/' + u.id + '/suspend', { why: 'console' }); }, 'Suspended') } }, 'Suspend') : null]; })));
+        isOwner() ? card(E('b', null, 'Promote or move someone'), E('p', { class: 'mut' }, 'Applies to future sales only; money already earned stays as posted.'), field('Person', pid), field('New role', prole), field('Reports to', pparent),
+          btn('Save', 'alt', function () {
+            var body = {}; if (prole.value) body.role = prole.value; if (pparent.value) body.parent_id = pparent.value === 'none' ? null : pparent.value;
+            act(function () { return api('POST', '/v1/admin/users/' + pid.value.trim() + '/placement', body); }, 'Saved')();
+          })) : null,
+        table(['Name', 'Role', 'Status', 'KYC', 'E-mail', 'ID', ''], r.users.map(function (u) { return [u.name, ROLE_NAME[u.role], pill(u.status, u.status === 'active' ? '' : 'o'), u.kyc_status, u.email_masked ? pill(u.email_verified ? 'verified' : 'not verified', u.email_verified ? '' : 'o') : '-', E('span', { class: 'code' }, u.id),
+          E('span', null,
+            u.status === 'active' ? post('/v1/admin/users/' + u.id + '/suspend', { why: 'console' }, { label: 'Suspend', cls: 'ghost', done: 'Suspended' }) : u.status === 'suspended' && isOwner() ? post('/v1/admin/users/' + u.id + '/reinstate', undefined, { label: 'Reinstate', cls: 'ghost', done: 'Reinstated' }) : null, ' ',
+            isOwner() && u.email_masked && !u.email_verified ? post('/v1/admin/users/' + u.id + '/verify-email', undefined, { label: 'I verify the e-mail', cls: 'ghost', done: 'E-mail marked verified' }, 'Mark this e-mail as verified by you?') : null, ' ',
+            isOwner() ? btn('Move', 'ghost', function () { pid.value = u.id; window.scrollTo(0, 0); }) : null, ' ',
+            isOwner() ? post('/v1/admin/users/' + u.id + '/erase', undefined, { label: 'Erase', cls: 'ghost', done: 'Personal details erased' }, 'Erase this person\'s personal details? The money trail stays; this cannot be undone.') : null)]; })));
     });
   };
 
@@ -275,18 +353,43 @@
     return Promise.all([api('GET', '/v1/admin/policy'), api('GET', '/v1/admin/sites')]).then(function (r) {
       var p = r[0], sites = r[1].sites;
       var min = E('input', { type: 'number', value: p.min_payout_minor / 100 }), win = E('input', { type: 'number', value: p.attribution_window_days }), tds = E('input', { type: 'number', step: '0.1', value: p.tds_bps_default / 100 });
+      var tdsOk = E('input', { type: 'checkbox', class: 'auto' }); tdsOk.checked = !!p.tds_confirmed;
       var ov = {}; ['exec', 'leader', 'manager'].forEach(function (k) { ov[k] = E('input', { type: 'number', step: '0.05', value: p.override_bps[k] / 100 }); });
+
+      var sel = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name + (s.active ? '' : ' (off)')); }));
+      var f = {
+        host: E('input'), commission: E('input', { type: 'number', step: '0.1' }), refer: E('input', { type: 'number', step: '0.1' }), ret: E('input', { type: 'number' }), buf: E('input', { type: 'number' }),
+        disc: E('input', { type: 'number', step: '0.1' }), refund: E('textarea', { rows: '3' }),
+        discOn: E('input', { type: 'checkbox', class: 'auto' }), confirmed: E('input', { type: 'checkbox', class: 'auto' }), active: E('input', { type: 'checkbox', class: 'auto' }),
+      };
+      var cur = function () { return sites.filter(function (s) { return s.id === sel.value; })[0]; };
+      var fill = function () {
+        var s = cur();
+        f.host.value = s.host; f.commission.value = s.commission_bps / 100; f.refer.value = s.refer_bps / 100; f.ret.value = s.return_days; f.buf.value = s.buffer_days;
+        f.disc.value = s.max_discount_bps / 100; f.refund.value = s.refund_terms || ''; f.discOn.checked = !!s.discount_allowed; f.confirmed.checked = !!s.host_confirmed; f.active.checked = !!s.active;
+      };
+      sel.addEventListener('change', fill); fill();
       return E('div', null, E('h1', null, 'Policy and sites'),
         card(E('b', null, 'Global rules'), isOwner() ? null : E('p', { class: 'mut' }, 'Read only: policy changes are owner-only.'),
           field('Minimum payout (Rs)', min), field('Attribution window (days)', win), field('TDS % at payout (placeholder until a CA confirms)', tds),
+          E('label', null, tdsOk, ' A CA has confirmed this TDS rate'),
           field('Override % to executive / team leader / manager on team sales', E('div', { class: 'grid' }, ov.exec, ov.leader, ov.manager)),
+          E('p', { class: 'mut' }, 'Partner links may only send visitors to: ' + p.owned_domains.join(', ')),
           isOwner() ? E('button', { class: 'btn', on: { click: act(function () {
-            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100),
+            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100), tds_confirmed: tdsOk.checked,
               override_bps: { exec: Math.round(ov.exec.value * 100), leader: Math.round(ov.leader.value * 100), manager: Math.round(ov.manager.value * 100) } });
           }, 'Policy saved') } }, 'Save') : null),
         E('h2', null, 'Sites'),
-        table(['Site', 'Refund window', 'Commission', 'Refer', 'Max discount'], sites.map(function (s) { return [s.name + ' (' + s.host + ')', s.return_days + ' + ' + s.buffer_days + ' days', (s.commission_bps / 100) + '%', (s.refer_bps / 100) + '%', s.discount_allowed ? (s.max_discount_bps / 100) + '%' : 'none']; })),
-        E('p', { class: 'mut' }, 'Site rates are changed through the API (PATCH /v1/admin/sites/:id); changes apply to future sales only.'));
+        table(['Site', 'Refund window', 'Commission', 'Refer', 'Max discount', 'Status'], sites.map(function (s) { return [s.name + ' (' + s.host + ')', s.return_days + ' + ' + s.buffer_days + ' days', (s.commission_bps / 100) + '%', (s.refer_bps / 100) + '%', s.discount_allowed ? (s.max_discount_bps / 100) + '%' : 'none',
+          s.active ? pill('live') : pill(s.host_confirmed ? 'off' : 'host not confirmed', 'o')]; })),
+        isOwner() ? card(E('b', null, 'Edit a site'), E('p', { class: 'mut' }, 'Changes apply to future sales only. A site goes live only after you confirm its host.'), field('Site', sel), field('Host (must be on an owned domain)', f.host),
+          E('div', { class: 'grid' }, field('Commission %', f.commission), field('Refer and Earn %', f.refer), field('Refund window (days)', f.ret), field('Buffer (days)', f.buf)),
+          E('label', null, f.discOn, ' Discount codes allowed'), field('Max discount %', f.disc), field('Refund terms shown to buyers before they pay (blank = draft default)', f.refund),
+          E('label', null, f.confirmed, ' I confirm this host is right'), E('label', null, f.active, ' Site is live'),
+          E('p', null, E('button', { class: 'btn', on: { click: act(function () {
+            return api('PATCH', '/v1/admin/sites/' + sel.value, { host: f.host.value.trim(), commission_bps: Math.round(f.commission.value * 100), refer_bps: Math.round(f.refer.value * 100), return_days: Number(f.ret.value), buffer_days: Number(f.buf.value),
+              discount_allowed: f.discOn.checked ? 1 : 0, max_discount_bps: Math.round(f.disc.value * 100), refund_terms: f.refund.value.trim() || null, host_confirmed: f.confirmed.checked ? 1 : 0, active: f.active.checked ? 1 : 0 });
+          }, 'Site saved') } }, 'Save site'))) : E('p', { class: 'mut' }, 'Site rates are edited by the owner.'));
     });
   };
 
@@ -329,9 +432,13 @@
   VIEWS.audit = function () {
     return Promise.all([api('GET', '/v1/admin/audit?limit=100'), api('GET', '/v1/admin/verify')]).then(function (r) {
       var v = r[1];
+      var line = function (c) { return c.ok ? pill('intact (' + c.rows + ' rows' + (c.checked != null ? ', checked ' + c.checked + ' new' + (c.complete ? '' : ', more to check') : '') + ')') : pill('BROKEN at ' + c.broken_at + (c.reason ? ': ' + c.reason : ''), 'r'); };
       return E('div', null, E('h1', null, 'Action log'),
-        card(E('b', null, 'Tamper check'), E('p', null, 'Ledger: ', pill(v.ledger.ok ? 'intact (' + v.ledger.rows + ' rows)' : 'BROKEN at ' + v.ledger.broken_at, v.ledger.ok ? '' : 'r'), ' Action log: ', pill(v.audit.ok ? 'intact (' + v.audit.rows + ' rows)' : 'BROKEN at ' + v.audit.broken_at, v.audit.ok ? '' : 'r')),
-          E('p', { class: 'mut' }, 'Both are append-only hash chains: any edit or deletion breaks every later hash.')),
+        card(E('b', null, 'Tamper check'), E('p', null, 'Ledger: ', line(v.ledger), ' Action log: ', line(v.audit)),
+          E('p', { class: 'mut' }, 'Both are append-only hash chains: any edit or deletion breaks every later hash. This check continues from where the last one stopped; "Check everything" re-hashes from the start.'),
+          E('button', { class: 'btn ghost', on: { click: function () {
+            api('GET', '/v1/admin/verify?full=1').then(function (x) { toast(x.ledger.ok && x.audit.ok ? 'Everything checks out' : 'A chain is BROKEN', !(x.ledger.ok && x.audit.ok)); route(); }, failToast);
+          } } }, 'Check everything')),
         auditTable(r[0].entries));
     });
   };

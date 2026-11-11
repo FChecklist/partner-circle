@@ -4,10 +4,10 @@
 
 import { sha256Hex, newId } from './util.js';
 
-const GENESIS = '0'.repeat(64);
+export const GENESIS = '0'.repeat(64);
 
 const ledgerFields = (r) => [r.seq, r.id, r.ts, r.account_id, r.kind, r.amount_minor, r.sale_id ?? '', r.payout_id ?? '', r.eligible_at, r.ref, r.memo ?? ''];
-const auditFields = (r) => [r.seq, r.ts, r.actor_type, r.actor_id ?? '', r.key_id ?? '', r.action, r.target ?? '', r.meta ?? ''];
+export const auditFields = (r) => [r.seq, r.ts, r.actor_type, r.actor_id ?? '', r.key_id ?? '', r.action, r.target ?? '', r.meta ?? ''];
 
 async function tail(db, table) {
   const r = await db.first(`SELECT seq, hash FROM ${table} ORDER BY seq DESC LIMIT 1`);
@@ -107,20 +107,50 @@ export async function audit(ctx, action, target, meta) {
   await atomic(ctx, () => auditStmts(ctx, [{ action, target, meta }]));
 }
 
-async function verifyChain(db, table, fieldsFn) {
-  const rows = await db.all(`SELECT * FROM ${table} ORDER BY seq`);
+const PAGE = 500;
+
+/**
+ * Re-hash a chain. Default = the whole chain from genesis (used by tests and offline checks).
+ * { incremental: true, now } = the cheap path for the live endpoint: re-check that the last checkpoint row still carries the hash
+ * we recorded (which anchors everything before it, since each hash covers its predecessor), then verify at most `max` newer rows
+ * and move the checkpoint forward. One call never reads more than `max` rows, so it stays inside Workers/D1 free-tier limits.
+ */
+async function verifyChain(db, table, fieldsFn, { incremental = false, max = 2000, now = Date.now() } = {}) {
   let prev = GENESIS;
   let expectSeq = 1;
-  for (const r of rows) {
-    if (r.seq !== expectSeq) return { ok: false, rows: rows.length, broken_at: r.seq, reason: 'sequence gap' };
-    if (r.prev_hash !== prev) return { ok: false, rows: rows.length, broken_at: r.seq, reason: 'prev_hash mismatch' };
-    const h = await sha256Hex([prev, ...fieldsFn(r)].join('|'));
-    if (h !== r.hash) return { ok: false, rows: rows.length, broken_at: r.seq, reason: 'hash mismatch' };
-    prev = r.hash;
-    expectSeq += 1;
+  if (incremental) {
+    const cp = await db.first('SELECT * FROM chain_checkpoints WHERE chain=?', [table]);
+    if (cp) {
+      const anchor = await db.first(`SELECT hash FROM ${table} WHERE seq=?`, [cp.seq]);
+      if (!anchor || anchor.hash !== cp.hash) return { ok: false, broken_at: cp.seq, reason: 'checkpoint row changed or missing', mode: 'incremental' };
+      prev = cp.hash;
+      expectSeq = cp.seq + 1;
+    }
   }
-  return { ok: true, rows: rows.length };
+  const total = (await db.first(`SELECT COUNT(*) AS n FROM ${table}`)).n;
+  const limit = incremental ? max : Infinity;
+  let checked = 0;
+  let lastSeq = expectSeq - 1;
+  while (checked < limit) {
+    const rows = await db.all(`SELECT * FROM ${table} WHERE seq >= ? ORDER BY seq LIMIT ?`, [expectSeq, Math.min(PAGE, limit - checked)]);
+    if (!rows.length) break;
+    for (const r of rows) {
+      if (r.seq !== expectSeq) return { ok: false, rows: total, broken_at: r.seq, reason: 'sequence gap' };
+      if (r.prev_hash !== prev) return { ok: false, rows: total, broken_at: r.seq, reason: 'prev_hash mismatch' };
+      const h = await sha256Hex([prev, ...fieldsFn(r)].join('|'));
+      if (h !== r.hash) return { ok: false, rows: total, broken_at: r.seq, reason: 'hash mismatch' };
+      prev = r.hash;
+      lastSeq = r.seq;
+      expectSeq += 1;
+      checked += 1;
+    }
+  }
+  if (!incremental) return { ok: true, rows: total };
+  if (checked) {
+    await db.run('INSERT INTO chain_checkpoints (chain,seq,hash,verified_at) VALUES (?,?,?,?) ON CONFLICT(chain) DO UPDATE SET seq=excluded.seq, hash=excluded.hash, verified_at=excluded.verified_at', [table, lastSeq, prev, now]);
+  }
+  return { ok: true, rows: total, checked, verified_through: lastSeq, complete: lastSeq >= total, mode: 'incremental' };
 }
 
-export const verifyLedger = (db) => verifyChain(db, 'ledger', ledgerFields);
-export const verifyAudit = (db) => verifyChain(db, 'audit_log', auditFields);
+export const verifyLedger = (db, opts) => verifyChain(db, 'ledger', ledgerFields, opts);
+export const verifyAudit = (db, opts) => verifyChain(db, 'audit_log', auditFields, opts);

@@ -1,22 +1,27 @@
-// Sale attribution, commission posting, refunds and Razorpay payment confirmation.
+// Sale attribution, commission posting, refunds, claims/chargebacks and Razorpay payment confirmation.
 //
-// A "sale completed" event comes from one of our sites (signed). We attribute it (code > click > lead), post commission
+// A "sale completed" event comes from one of our sites (signed). We attribute it (code > prospect > click > lead), post commission
 // and upline override entries to the append-only ledger, and set when they mature:
-//   eligible_at = paid_at + (site.return_days + site.buffer_days)   (37 days Veridian/PROJEXA, 7 days games/Townhall)
-// Money only becomes payable once Razorpay has confirmed the same payment (rzp_status = 'confirmed').
+//   eligible_at = max(paid_at, now - max_backdate_days) + (site.return_days + site.buffer_days)   (37 days Veridian/PROJEXA, 7 days games/Townhall)
+// Money only becomes payable once Razorpay has confirmed the same payment (rzp_status = 'confirmed'), the sale is not refunded and
+// no claim/chargeback is open on it. One Razorpay payment id belongs to exactly one sale.
 
 import { HttpError, newId, needStr, isInt, DAY } from './util.js';
 import { atomic, auditStmts, ledgerStmts } from './chain.js';
 import { getPolicy, holdDays } from './policy.js';
 import { RANK, uplineOf } from './users.js';
+import { notify } from './notify.js';
 
 const MAX_AMOUNT = 100_000_000_00; // Rs 10 crore in paise: a sanity cap, not a business rule
 
 export const saleView = (s) => ({
   id: s.id, site_id: s.site_id, order_id: s.order_id, amount_minor: s.amount_minor, net_minor: s.net_minor, currency: s.currency,
   paid_at: s.paid_at, eligible_at: s.eligible_at, attribution: s.attribution, status: s.status, block_reason: s.block_reason,
-  rzp_status: s.rzp_status, refunded_at: s.refunded_at, refund_after_payout: !!s.refund_after_maturity,
+  rzp_status: s.rzp_status, refunded_at: s.refunded_at, refund_after_payout: !!s.refund_after_payout,
+  dispute_status: s.dispute_status ?? null, usage_verified: s.usage_verified == null ? null : !!s.usage_verified,
 });
+
+const lastDigits = (p) => String(p || '').replace(/\D/g, '').slice(-10);
 
 function parseSale(body, now) {
   if (!body || typeof body !== 'object') throw new HttpError(422, 'invalid_body', 'JSON object expected');
@@ -28,7 +33,7 @@ function parseSale(body, now) {
   if (currency !== 'INR') throw new HttpError(422, 'unsupported_currency', 'only INR sales are supported in this version');
   const paid_at = body.paid_at ?? now;
   if (!isInt(paid_at, 1) || paid_at > now + 5 * 60000) throw new HttpError(422, 'invalid_field', 'paid_at must be a past epoch-ms timestamp');
-  for (const f of ['razorpay_payment_id', 'razorpay_order_id', 'click_id', 'code', 'customer_email']) {
+  for (const f of ['razorpay_payment_id', 'razorpay_order_id', 'click_id', 'code', 'customer_email', 'customer_phone']) {
     if (body[f] != null && (typeof body[f] !== 'string' || body[f].length > 254)) throw new HttpError(422, 'invalid_field', f);
   }
   return { order_id, amount_minor: body.amount_minor, tax_minor: tax, currency, paid_at };
@@ -63,11 +68,14 @@ async function attribute(ctx, site, body, customerHash, paidAt, policy) {
   return { user_id: null, attribution: 'none' };
 }
 
-async function rzpState(ctx, paymentId, amount) {
+/** Does a Razorpay capture we already received match this sale? (payment id, amount, and the Razorpay order id when both sides have one) */
+async function rzpState(ctx, paymentId, amount, orderId) {
   if (!paymentId) return 'pending';
   const ev = await ctx.db.first("SELECT * FROM razorpay_events WHERE payment_id=? AND type='payment.captured' ORDER BY ts LIMIT 1", [paymentId]);
   if (!ev) return 'pending';
-  return ev.amount_minor === amount ? 'confirmed' : 'mismatch';
+  if (ev.amount_minor !== amount) return 'mismatch';
+  if (orderId && ev.order_id && ev.order_id !== orderId) return 'mismatch';
+  return 'confirmed';
 }
 
 export async function recordSale(ctx, site, body) {
@@ -76,6 +84,10 @@ export async function recordSale(ctx, site, body) {
   if (dup) {
     if (dup.amount_minor !== p.amount_minor) throw new HttpError(409, 'order_conflict', 'this order_id was already recorded with a different amount');
     return { ...saleView(dup), duplicate: true };
+  }
+  const rzpPaymentId = body.razorpay_payment_id || null;
+  if (rzpPaymentId && (await ctx.db.first('SELECT 1 AS x FROM sales WHERE razorpay_payment_id=?', [rzpPaymentId]))) {
+    throw new HttpError(409, 'payment_reused', 'this Razorpay payment id already belongs to another sale; one payment confirms one sale');
   }
   const policy = await getPolicy(ctx);
   const net = p.amount_minor - p.tax_minor;
@@ -86,15 +98,17 @@ export async function recordSale(ctx, site, body) {
   let status = 'recorded';
   let blockReason = null;
   if (user) {
-    if (user.email_hash && customerHash && user.email_hash === customerHash) { status = 'blocked'; blockReason = 'self_referral'; }
+    const samePhone = user.phone && body.customer_phone && lastDigits(user.phone).length >= 8 && lastDigits(user.phone) === lastDigits(body.customer_phone);
+    if ((user.email_hash && customerHash && user.email_hash === customerHash) || samePhone) { status = 'blocked'; blockReason = 'self_referral'; }
     else if (user.status !== 'active') { status = 'blocked'; blockReason = 'partner_not_active'; }
   }
 
+  // The hold clock may not start more than max_backdate_days before we heard about the sale: a site cannot shorten the hold by back-dating.
+  const clockStart = Math.max(p.paid_at, ctx.now() - policy.max_backdate_days * DAY);
   const holdD = holdDays(site);
-  const eligible = p.paid_at + holdD * DAY;
+  const eligible = clockStart + holdD * DAY;
   const id = newId('sl');
-  const rzpPaymentId = body.razorpay_payment_id || null;
-  const rzp = await rzpState(ctx, rzpPaymentId, p.amount_minor);
+  const rzp = await rzpState(ctx, rzpPaymentId, p.amount_minor, body.razorpay_order_id || null);
 
   const entries = [];
   const summary = { commission_minor: 0, overrides: [] };
@@ -135,33 +149,68 @@ export async function recordSale(ctx, site, body) {
     if (/UNIQUE constraint failed: sales\.site_id, sales\.order_id/.test(String(e.message))) {
       return { ...saleView(await ctx.db.first('SELECT * FROM sales WHERE site_id=? AND order_id=?', [site.id, p.order_id])), duplicate: true };
     }
+    if (/UNIQUE constraint failed: sales\.razorpay_payment_id/.test(String(e.message))) {
+      throw new HttpError(409, 'payment_reused', 'this Razorpay payment id already belongs to another sale; one payment confirms one sale');
+    }
     throw e;
   }
+  // Razorpay may have told us about a refund or a claim BEFORE the site told us about the sale: apply whatever was waiting.
+  await applyBufferedEvents(ctx, id);
   const row = await ctx.db.first('SELECT * FROM sales WHERE id=?', [id]);
   return { ...saleView(row), partner_handle: user?.handle ?? null, ...summary, duplicate: false };
 }
 
+// ---- cancelling a payout that has not been sent yet -------------------------------------------------------------
+
 /**
- * Apply a refund. Entries not yet swept into a payout are voided. Entries already in a payout are NOT clawed back
- * (owner policy: pay late, never claw back) and the sale is flagged for the owner instead.
+ * A payout that is still waiting (pending_approval, or approved but not yet handed to the provider) holds ledger entries. If one of its
+ * sales is refunded or put on hold, the whole payout is rejected and its reserve released: the partner can simply request again.
+ * Returns statements to run in the SAME batch as the sale change (so nothing is ever half-applied).
+ */
+async function cancelWaitingPayouts(ctx, saleId, why) {
+  const payouts = await ctx.db.all(
+    `SELECT DISTINCT p.* FROM payouts p JOIN payout_items pi ON pi.payout_id = p.id JOIN ledger l ON l.seq = pi.ledger_seq
+      WHERE l.sale_id=? AND p.status IN ('pending_approval','approved')`, [saleId]);
+  return {
+    payouts,
+    sql: payouts.flatMap((p) => [
+      { sql: 'DELETE FROM payout_items WHERE payout_id=?', params: [p.id] },
+      { sql: "UPDATE payouts SET status='rejected', note=? WHERE id=? AND status IN ('pending_approval','approved')", params: [why, p.id] },
+    ]),
+    ledger: payouts.map((p) => ({ account_id: p.user_id, kind: 'payout_release', amount_minor: p.gross_minor, payout_id: p.id, eligible_at: ctx.now(), ref: `release:${p.id}`, memo: why })),
+  };
+}
+
+const tellCancelled = (ctx, payouts) =>
+  Promise.all(payouts.map((p) => notify(ctx, p.user_id, 'Your payout request was cancelled', 'A sale in your payout request was refunded or put on hold, so the request was cancelled and the money is back in your balance. You can request a payout again.')));
+
+/**
+ * Apply a refund. Commission not yet sent is voided. Commission already SENT to the partner (payout processing or paid) is NOT clawed
+ * back (owner policy: pay late, never claw back) and the sale is flagged for the owner instead. A payout still waiting for approval is
+ * cancelled and released, with the refunded sale's entries voided.
  */
 export async function applyRefund(ctx, sale, meta = {}) {
   if (sale.status === 'refunded') return { ...saleView(sale), already_refunded: true };
   const entries = await ctx.db.all("SELECT * FROM ledger WHERE sale_id=? AND kind IN ('commission','override')", [sale.id]);
-  const settled = new Set(
+  const sent = new Set(
     (await ctx.db.all(
       `SELECT pi.ledger_seq FROM payout_items pi JOIN payouts p ON p.id = pi.payout_id
-        WHERE p.status NOT IN ('rejected','failed') AND pi.ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)`, [sale.id])).map((r) => r.ledger_seq));
+        WHERE p.status IN ('processing','paid') AND pi.ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)`, [sale.id])).map((r) => r.ledger_seq));
+  const cancel = await cancelWaitingPayouts(ctx, sale.id, 'a sale in this payout was refunded');
   const voids = entries
-    .filter((e) => !settled.has(e.seq))
+    .filter((e) => !sent.has(e.seq))
     .map((e) => ({ account_id: e.account_id, kind: 'void', amount_minor: -e.amount_minor, sale_id: sale.id, eligible_at: e.eligible_at, ref: `void:${e.id}`, memo: meta.reason || 'refund' }));
-  const flag = settled.size > 0 ? 1 : 0;
+  const flag = sent.size > 0 ? 1 : 0;
+  const usage = typeof meta.usage_verified === 'boolean' ? (meta.usage_verified ? 1 : 0) : null;
   await atomic(ctx, async () => [
-    { sql: "UPDATE sales SET status='refunded', refunded_at=?, refund_after_maturity=? WHERE id=? AND status<>'refunded'", params: [ctx.now(), flag, sale.id] },
-    ...(await ledgerStmts(ctx, voids)),
+    { sql: "UPDATE sales SET status='refunded', refunded_at=?, refund_after_payout=?, usage_verified=?, refund_reason=?, dispute_status=COALESCE(?, dispute_status) WHERE id=? AND status<>'refunded'",
+      params: [ctx.now(), flag, usage, meta.reason || null, meta.disputeStatus || null, sale.id] },
+    ...cancel.sql,
+    ...(await ledgerStmts(ctx, [...voids, ...cancel.ledger])),
     ...(await auditStmts(ctx, [{ action: flag ? 'sale.refunded_after_payout' : 'sale.refunded', target: `sale:${sale.id}`,
-      meta: { voided: voids.length, kept_paid: settled.size, reason: meta.reason || null, usage_verified: meta.usage_verified ?? null } }])),
+      meta: { voided: voids.length, kept_paid: sent.size, cancelled_payouts: cancel.payouts.map((p) => p.id), reason: meta.reason || null, usage_verified: meta.usage_verified ?? null } }])),
   ]);
+  await tellCancelled(ctx, cancel.payouts);
   return saleView(await ctx.db.first('SELECT * FROM sales WHERE id=?', [sale.id]));
 }
 
@@ -175,11 +224,57 @@ export async function recordRefund(ctx, site, body) {
   });
 }
 
+// ---- claims / chargebacks ---------------------------------------------------------------------------------------
+
+/** payment.dispute.* event -> claim state. 'closed' alone does not say who won, so it leaves the state as it was (still on hold). */
+export const disputeStateFor = (type, current = null) =>
+  ({ 'payment.dispute.created': 'open', 'payment.dispute.under_review': 'open', 'payment.dispute.action_required': 'open', 'payment.dispute.won': 'won', 'payment.dispute.lost': 'lost' })[type] ?? current;
+
+/**
+ * Put a sale on hold (open), clear it (won) or refund it (lost). An open claim blocks the commission from becoming payable
+ * ("pay only if no refund asked and no claim raised") and cancels a payout still waiting for approval.
+ */
+export async function setDispute(ctx, sale, state, note) {
+  if (!['open', 'won', 'lost'].includes(state)) throw new HttpError(422, 'invalid_field', 'state must be open, won or lost');
+  if (sale.status === 'refunded') return { ...saleView(sale), already_refunded: true };
+  if (state === 'lost') return applyRefund(ctx, sale, { reason: note || 'claim lost', disputeStatus: 'lost' });
+  if (sale.dispute_status === state) return saleView(sale);
+  const cancel = state === 'open' ? await cancelWaitingPayouts(ctx, sale.id, 'a claim was raised on a sale in this payout') : { payouts: [], sql: [], ledger: [] };
+  await atomic(ctx, async () => [
+    { sql: 'UPDATE sales SET dispute_status=?, dispute_note=?, disputed_at=COALESCE(disputed_at, ?) WHERE id=?', params: [state, note ? String(note).slice(0, 200) : null, ctx.now(), sale.id] },
+    ...cancel.sql,
+    ...(await ledgerStmts(ctx, cancel.ledger)),
+    ...(await auditStmts(ctx, [{ action: `sale.claim_${state}`, target: `sale:${sale.id}`, meta: { note: note || null, cancelled_payouts: cancel.payouts.map((p) => p.id) } }])),
+  ]);
+  await tellCancelled(ctx, cancel.payouts);
+  return saleView(await ctx.db.first('SELECT * FROM sales WHERE id=?', [sale.id]));
+}
+
+/** Razorpay events that arrived before the site reported the sale (refund, claim) are replayed once the sale exists. */
+async function applyBufferedEvents(ctx, saleId) {
+  const sale = await ctx.db.first('SELECT * FROM sales WHERE id=?', [saleId]);
+  if (!sale?.razorpay_payment_id) return;
+  const evs = await ctx.db.all(
+    "SELECT type, amount_minor FROM razorpay_events WHERE payment_id=? AND (type='refund.processed' OR type LIKE 'payment.dispute.%') ORDER BY ts, rowid", [sale.razorpay_payment_id]);
+  if (!evs.length) return;
+  const actx = { ...ctx, actor: { type: 'razorpay', id: 'buffered' } };
+  let refunded = 0;
+  let dispute = null;
+  for (const e of evs) {
+    if (e.type === 'refund.processed') refunded += e.amount_minor || 0;
+    else dispute = disputeStateFor(e.type, dispute);
+  }
+  if (refunded >= sale.amount_minor) { await applyRefund(actx, sale, { reason: 'refund.processed arrived before the sale was recorded' }); return; }
+  if (dispute) await setDispute(actx, sale, dispute, 'claim event arrived before the sale was recorded');
+  if (refunded > 0) await atomic(actx, () => auditStmts(actx, [{ action: 'sale.partial_refund_review', target: `sale:${sale.id}`, meta: { refund_minor: refunded, sale_minor: sale.amount_minor } }]));
+}
+
 /** Razorpay says payment X was captured for amount Y: confirm (or flag) every sale carrying that payment id. */
-export async function confirmPayment(ctx, paymentId, amountMinor) {
+export async function confirmPayment(ctx, paymentId, amountMinor, orderId = null) {
   const sales = await ctx.db.all("SELECT * FROM sales WHERE razorpay_payment_id=? AND rzp_status='pending'", [paymentId]);
   for (const s of sales) {
-    const st = s.amount_minor === amountMinor ? 'confirmed' : 'mismatch';
+    const ok = s.amount_minor === amountMinor && !(s.razorpay_order_id && orderId && s.razorpay_order_id !== orderId);
+    const st = ok ? 'confirmed' : 'mismatch';
     await atomic(ctx, async () => [
       { sql: "UPDATE sales SET rzp_status=? WHERE id=? AND rzp_status='pending'", params: [st, s.id] },
       ...(await auditStmts(ctx, [{ action: `sale.rzp_${st}`, target: `sale:${s.id}`, meta: { payment_id: paymentId, razorpay_amount: amountMinor, sale_amount: s.amount_minor } }])),
@@ -195,11 +290,11 @@ export async function listSales(ctx, userId, limit = 50) {
 /** Catch any sale/event pair that crossed in flight: confirm pending sales whose Razorpay capture event already arrived. */
 export async function reconcilePending(ctx, userId = null) {
   const rows = await ctx.db.all(
-    `SELECT s.razorpay_payment_id AS pid, e.amount_minor AS amt FROM sales s JOIN razorpay_events e
+    `SELECT s.razorpay_payment_id AS pid, e.amount_minor AS amt, e.order_id AS oid FROM sales s JOIN razorpay_events e
        ON e.payment_id = s.razorpay_payment_id AND e.type='payment.captured'
       WHERE s.rzp_status='pending' ${userId ? 'AND s.id IN (SELECT sale_id FROM ledger WHERE account_id=?)' : ''} GROUP BY s.razorpay_payment_id`,
     userId ? [userId] : []);
   let n = 0;
-  for (const r of rows) n += await confirmPayment(ctx, r.pid, r.amt);
+  for (const r of rows) n += await confirmPayment(ctx, r.pid, r.amt, r.oid);
   return n;
 }

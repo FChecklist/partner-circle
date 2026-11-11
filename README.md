@@ -36,11 +36,11 @@ only in the dev server. The dev server uses a mock payout provider and a mock ma
 ## Tests
 
 ```
-npm test            # node --test "test/*.test.js"  (no dependencies; 70 tests)
+npm test            # node --test "test/*.test.js"  (no dependencies; 108 tests)
 npm run build       # syntax-checks every JS file, replays migrations on an empty DB, seeds the sites
 ```
 
-Last run: **70 / 70 pass** on this laptop (Node 26.3) and on the partner laptop (Node 22.23). What the suites prove:
+Last run (11 Nov 2026, after the independent-review hardening): **108 / 108 pass** on this laptop (Node 26.3) and, from a fresh copy of the sources, on the partner laptop (Node 22.23.4). Both were real runs of `node --test test/*.test.js`. What the suites prove:
 
 | File | Covers |
 |---|---|
@@ -50,6 +50,7 @@ Last run: **70 / 70 pass** on this laptop (Node 26.3) and on the partner laptop 
 | `test/payouts.test.js` | payout gating, owner-only approval, provider webhook, reject / fail / retry, **no clawback**, refund-then-failed-payout, overrides payout, TDS, audit trail, RazorpayX adapter shape (fake fetch), env adapter selection |
 | `test/schemes-embed.test.js` | schemes (AI drafts, owner activates / settles), leaderboard privacy, embed snippet in a VM, public sites endpoint, site secret derive / rotate |
 | `test/extras.test.js` | prospect registration + protection window, non-India manual payouts, strict key minting |
+| `test/hardening.test.js` | one regression test per finding of the 10-11 Nov independent review: public register cannot self-activate, one payment = one sale (app + unique index), frozen payout destination and masked KYC, payout reversal / out-of-state events, disputes and claim holds, refunds that cancel waiting payouts and arrive before the sale, `paid_at` clamp, phone self-referral, atomic audited key operations, `access.denied` / `ai.read` logging, owner-key bootstrap into the log, site-host confirmation and owned-domain redirects, RazorpayX mode vs key prefix, mail-not-configured + owner e-mail verify, parallel code-guess cap, notification e-mails, suspended keys, placement, per-request actor, incremental verify, retention purge, DPDP erasure, D1 100-variable limit, static CSP check, and the mutation check for the route-level AI owner-only guard |
 | `test/platform.test.js` | Pages Function on a faithful D1 fake, fail-closed without secrets, migration replay, DB-level constraints, concurrency (duplicate deliveries, bursts, double payout request) |
 
 ## Deploy (Cloudflare free tier) — owner steps, nothing here has been deployed
@@ -80,5 +81,5 @@ test/         node:test suites (no dependencies)
 ## Honest limits
 
 See `ASSUMPTIONS.md` ("Not done / needs the owner"). In short: nothing is deployed, no live Razorpay / RazorpayX / Resend
-call has ever been made, TDS / GST / foreign-payee tax is a recorded placeholder until a CA confirms, salary / target pay for
+call has ever been made, real Cloudflare D1 has never been exercised (only a D1-shaped fake that also enforces the 100-bound-variable limit), the browser UI was not re-driven by hand after the hardening (the automated checks are API-level plus a static CSP check), TDS / GST / foreign-payee tax is a recorded placeholder until a CA confirms, salary / target pay for
 managers is not modelled, and the hash chains detect tampering but are not an external timestamped notary.

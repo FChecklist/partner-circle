@@ -1,6 +1,6 @@
 // Personal links, discount codes, click tracking and lead capture.
 
-import { HttpError, newId, randSlug, needStr, isInt, DAY } from './util.js';
+import { HttpError, newId, randSlug, needStr, isInt, hostIsOwned, DAY } from './util.js';
 import { atomic, auditStmts } from './chain.js';
 import { getPolicy } from './policy.js';
 
@@ -50,6 +50,8 @@ export async function followLink(ctx, slug, ip) {
     `SELECT l.*, s.host, u.status AS user_status FROM links l JOIN sites s ON s.id = l.site_id AND s.active=1
        JOIN users u ON u.id = l.user_id WHERE l.slug=? AND l.active=1`, [slug]);
   if (!l) throw new HttpError(404, 'not_found', 'link not found');
+  // Never redirect a visitor to a host the owner does not control, whatever the sites table says.
+  if (!hostIsOwned(l.host, (await getPolicy(ctx)).owned_domains)) throw new HttpError(502, 'site_host_not_owned', 'this site is not on an owned domain; ask the owner');
   const clickId = newId('ck');
   const ipHash = ip ? await ctx.pepper(`${ip}|${Math.floor(ctx.now() / DAY)}`) : null;
   // Clicks are logged even for non-active partners (for the audit trail) but only active partners can earn from them.
@@ -151,8 +153,10 @@ export async function recordLead(ctx, site, body) {
     if (c && ctx.now() - c.ts <= windowMs) { userId = c.user_id; source = 'click'; clickId = c.id; }
   }
   if (!userId) return { recorded: false, attributed: false };
-  const u = await ctx.db.first('SELECT email_hash, status FROM users WHERE id=?', [userId]);
-  if (u.email_hash && u.email_hash === customerHash) {
+  const u = await ctx.db.first('SELECT email_hash, phone, status FROM users WHERE id=?', [userId]);
+  const lastDigits = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+  const samePhone = u.phone && body.customer_phone && lastDigits(u.phone).length >= 8 && lastDigits(u.phone) === lastDigits(body.customer_phone);
+  if ((u.email_hash && u.email_hash === customerHash) || samePhone) {
     await atomic(ctx, () => auditStmts({ ...ctx, actor: { type: 'site', id: site.id } }, [{ action: 'lead.blocked', target: `user:${userId}`, meta: { reason: 'self_referral', site_id: site.id } }]));
     return { recorded: false, attributed: false, blocked: 'self_referral' };
   }

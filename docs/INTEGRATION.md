@@ -105,3 +105,21 @@ the product (daily use or complete end-to-end use cases), and show the condition
 Point Razorpay's webhook at `https://PC/v1/webhooks/razorpay`; it is verified with `X-Razorpay-Signature` using the webhook
 secret and de-duplicated by `X-Razorpay-Event-Id`. PC consumes `payment.captured` (confirms sales), `refund.processed`
 (full refunds are applied; partial refunds are flagged for review) and `payout.processed|failed|reversed` (settles payouts).
+
+## 9. Added in the 11 Nov hardening (what sites and the owner console must know)
+
+**Sales.** `razorpay_payment_id` must be unique: a second sale with the same payment id is `409 payment_reused` (and the database has a unique index). If you send `razorpay_order_id` it must match the captured payment's order. `paid_at` is trusted only up to `max_backdate_days` (default 1) before the moment PC hears of the sale; the hold clock starts from the later of the two. Send `customer_phone` if you have it: a buyer whose phone equals the partner's is a self-referral.
+
+**Refunds and claims.** `POST /v1/integration/refunds` accepts `usage_verified` (true only if the buyer really used the product); refunds without it are counted in the owner summary as `refunds_without_usage_proof`. A refund (or a Razorpay `payment.dispute.created|lost`) that arrives while the commission sits in a waiting payout voids the commission and cancels that payout so the partner can ask again for the right amount; only a payout already sent (processing / paid) is kept and flagged `refund_after_payout`. Refund or dispute events that reach PC before the sale is recorded are stored and applied when the sale arrives. `payment.dispute.created` puts the commission on claim hold, `.won` releases it, `.lost` refunds it; `.closed` is left on hold for the owner. Owner endpoints: `GET /v1/admin/claims`, `POST /v1/admin/sales/:id/claim {action: hold|won|lost, note}`.
+
+**Buyers.** `GET /v1/public/sites` returns `refund_terms` per site (owner text, or a marked draft default). Show it before payment.
+
+**Payouts.** The destination is frozen (encrypted) at request time and that snapshot is what gets paid; KYC cannot be edited while a payout is open (`409 payout_open`). The owner sees masked details in the queue and can read the full destination (`GET /v1/admin/payouts/:id/destination`, owner only, logged). Manual (non-India) payouts: `POST /v1/admin/payouts/:id/mark-paid {reference}` or `.../mark-failed {reason}`. `payout.reversed|failed` after `paid` restores the balance (`status=failed`, `reversed_at` set); a payout event that does not fit the payout's state or amount is acknowledged with `200` and written to the log for review instead of a `409` that Razorpay would retry forever.
+
+**Test vs live.** Razorpay has no sandbox host. `PAYOUT_MODE=test` requires an `rzp_test_` key id, `live` requires `rzp_live_`; any other pairing refuses to start (the Pages Function answers `500 server_misconfigured`). The mode that sent each payout is stored on it.
+
+**E-mail.** With no mailer configured, `POST /v1/me/email/send-code` is `503 mail_not_configured`. The owner can verify an address by hand: `POST /v1/admin/users/:id/verify-email`. Five wrong codes lock a code, even under parallel guesses.
+
+**People and sites.** `POST /v1/register` accepts only role, name, email, phone, country and sponsor; partners always start `pending`. `POST /v1/admin/users/:id/placement {role?, parent_id?}` promotes or re-parents (owner scope `users.approve`; no loops, children must stay valid). `POST /v1/admin/users/:id/erase` (owner only) removes personal details when no money is owed and no payout is open; the ledger rows stay. `POST /v1/admin/maintenance/purge` deletes expired clicks, leads, codes and idempotency rows. `PATCH /v1/admin/sites/:id` takes `host`, `host_confirmed`, `refund_terms`; a host must sit under the policy's `owned_domains` and a site cannot go live until its host is confirmed.
+
+**Audit and verification.** Key create / revoke / issue and secret rotation are written in the same atomic batch as their log entry. Refused admin calls are logged as `access.denied`, AI reads as `ai.read`. `GET /v1/admin/verify` continues from a saved checkpoint; `?full=1` re-hashes everything. `scripts/mint-owner-key.mjs` now emits SQL that writes the first log entry (`key.bootstrap`) and only applies to a fresh database.

@@ -130,14 +130,13 @@ test('NO CLAWBACK: a refund after the commission was swept into a payout keeps t
   const h = await mk();
   const p = await funded(h);
   const po = (await h.call('POST', '/v1/me/payouts', { key: p.key })).data;
+  const ap = (await h.call('POST', `/v1/admin/payouts/${po.id}/approve`, { key: h.owner })).data; // approved and handed to the provider = SENT
+  assert.equal(ap.status, 'processing');
   const r = await h.signed('mom', 'POST', '/v1/integration/refunds', { order_id: 'o-Pia', reason: 'late chargeback' });
   assert.equal(r.data.status, 'refunded');
   assert.equal(r.data.refund_after_payout, true);
   assert.equal((await h.db.first("SELECT COUNT(*) AS n FROM ledger WHERE kind='void'")).n, 0, 'nothing is clawed back');
-  const q = await h.call('GET', '/v1/admin/queue', { key: h.owner });
-  assert.equal(q.data.payouts[0].flagged_refunds, 1);
-  const ap = (await h.call('POST', `/v1/admin/payouts/${po.id}/approve`, { key: h.owner })).data;
-  assert.equal(ap.status, 'processing');
+  assert.equal((await h.db.first('SELECT status FROM payouts WHERE id=?', [po.id])).status, 'processing', 'the sent payout is untouched');
   assert.equal((await h.call('GET', '/v1/admin/summary', { key: h.owner })).data.flagged_refunds, 1);
 });
 
@@ -207,7 +206,7 @@ test('RazorpayX adapter builds the documented request (UPI and bank), sends an i
   };
   const a = razorpayXAdapter({ keyId: 'rzp_test_x', keySecret: 'secretsecretsecret', accountNumber: '2323230000000000', fetchImpl });
   const r = await a.createPayout({ payout_id: 'po_1', amount_minor: 135000, method: 'upi', destination: { upi_id: 'a@okbank' }, name: 'Pia' });
-  assert.deepEqual(r, { provider: 'razorpayx', provider_ref: 'pout_abc', status: 'processing' });
+  assert.deepEqual(r, { provider: 'razorpayx', provider_ref: 'pout_abc', status: 'processing', mode: 'test' });
   assert.equal(seen[0].url, 'https://api.razorpay.com/v1/payouts');
   assert.equal(seen[0].init.headers['X-Payout-Idempotency'], 'po_1');
   assert.match(seen[0].init.headers.authorization, /^Basic /);
@@ -216,7 +215,7 @@ test('RazorpayX adapter builds the documented request (UPI and bank), sends an i
   assert.equal(seen[0].body.fund_account.vpa.address, 'a@okbank');
   await a.createPayout({ payout_id: 'po_2', amount_minor: 5000, method: 'bank', destination: { bank_account: '123456', bank_ifsc_swift: 'HDFC0000001' }, name: 'Pia' });
   assert.equal(seen[1].body.fund_account.account_type, 'bank_account');
-  const bad = razorpayXAdapter({ keyId: 'k', keySecret: 's', accountNumber: 'n', fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ error: { description: 'insufficient balance' } }) }) });
+  const bad = razorpayXAdapter({ keyId: 'rzp_test_k', keySecret: 's', accountNumber: 'n', fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({ error: { description: 'insufficient balance' } }) }) });
   await assert.rejects(() => bad.createPayout({ payout_id: 'po_3', amount_minor: 1, method: 'upi', destination: { upi_id: 'a@b' }, name: 'x' }), /insufficient balance/);
   assert.throws(() => razorpayXAdapter({ keyId: 'k' }), /incomplete/);
 });
@@ -225,7 +224,7 @@ test('adapters from env: mock by default; RazorpayX only when PAYOUT_MODE is set
   assert.equal(adaptersFromEnv({}, fetch).payouts.mode, 'mock');
   assert.equal(adaptersFromEnv({}, fetch).mailer, undefined);
   assert.throws(() => adaptersFromEnv({ PAYOUT_MODE: 'live' }, fetch), /incomplete/);
-  const t = adaptersFromEnv({ PAYOUT_MODE: 'test', RAZORPAYX_KEY_ID: 'a', RAZORPAYX_KEY_SECRET: 'b', RAZORPAYX_ACCOUNT_NUMBER: 'c' }, fetch);
+  const t = adaptersFromEnv({ PAYOUT_MODE: 'test', RAZORPAYX_KEY_ID: 'rzp_test_a', RAZORPAYX_KEY_SECRET: 'b', RAZORPAYX_ACCOUNT_NUMBER: 'c' }, fetch);
   assert.equal(t.payouts.mode, 'test');
   const sent = [];
   const m = resendMailer({ apiKey: 're_x', from: 'Partner Circle <no-reply@example.test>', fetchImpl: async (u, i) => (sent.push([u, JSON.parse(i.body)]), { ok: true, status: 200 }) });

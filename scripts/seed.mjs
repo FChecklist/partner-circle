@@ -25,6 +25,7 @@ if (!(await db.first('SELECT 1 AS x FROM sites LIMIT 1'))) await seedSites(db);
 console.log('sites:', (await db.first('SELECT COUNT(*) AS n FROM sites')).n);
 if (!process.argv.includes('--demo')) process.exit(0);
 
+await db.run('UPDATE sites SET active=1, host_confirmed=1'); // demo data only: stands in for the owner confirming every host
 const mailer = nullMailer();
 const realNow = Date.now();
 let clock = realNow - 45 * 86400000;

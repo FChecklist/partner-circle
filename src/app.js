@@ -1,9 +1,9 @@
 // HTTP surface. One function, handle(ctx, request) -> Response, shared by the Cloudflare Pages Function and the local dev server.
 
-import { HttpError, json, isInt, needStr } from './util.js';
+import { HttpError, json, isInt, needStr, isHostname, hostIsOwned } from './util.js';
 import { authenticate, bearer, requireScope, requireKind, rateLimit, verifySiteSignature, createKey, revokeKey, siteSecret, OWNER_ONLY_SCOPES } from './auth.js';
-import { atomic, auditStmts, verifyLedger, verifyAudit } from './chain.js';
-import { getPolicy, POLICY_VALIDATORS } from './policy.js';
+import { atomic, auditStmts, audit, verifyLedger, verifyAudit } from './chain.js';
+import { getPolicy, POLICY_VALIDATORS, defaultRefundTerms } from './policy.js';
 import * as U from './users.js';
 import * as L from './links.js';
 import * as S from './sales.js';
@@ -11,6 +11,7 @@ import * as P from './payouts.js';
 import * as SC from './schemes.js';
 import * as PR from './prospects.js';
 import { handleRazorpayWebhook } from './razorpay.js';
+import { purgeExpired } from './retention.js';
 
 const MAX_BODY = 64 * 1024;
 const routes = [];
@@ -23,8 +24,10 @@ const route = (method, pattern, opts, fn) => {
 // ---------------------------------------------------------------- public
 route('GET', '/v1/health', { auth: 'public' }, async ({ ctx }) => ({ ok: true, time: ctx.now() }));
 
+// refund_terms is what a site shows the buyer BEFORE they pay (the owner's wording, or a clearly-marked draft default).
 route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx }) =>
-  (await ctx.db.all('SELECT id,name,host,discount_allowed,max_discount_bps,return_days FROM sites WHERE active=1 ORDER BY name')));
+  (await ctx.db.all('SELECT id,name,host,discount_allowed,max_discount_bps,return_days,refund_terms FROM sites WHERE active=1 ORDER BY name'))
+    .map((s) => ({ ...s, refund_terms: s.refund_terms || defaultRefundTerms(s) })));
 
 // (idem:false: the response holds a login key, which must never be cached)
 route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => [201, await U.register(ctx, body)]);
@@ -81,9 +84,10 @@ route('GET', '/v1/me/summary', me, async ({ ctx, actor }) => {
   const u = actor.user;
   const since = ctx.now() - 30 * 86400000;
   const n = async (sql, p) => (await ctx.db.first(sql, p)).n || 0;
-  const team = await U.teamOf(ctx, u.id);
-  const ids = team.map((t) => t.id);
-  const teamNet = ids.length ? await n(`SELECT SUM(net_minor) AS n FROM sales WHERE status='recorded' AND paid_at>=? AND user_id IN (${ids.map(() => '?').join(',')})`, [since, ...ids]) : 0;
+  // One recursive query with two bound values: D1 allows only 100 bound variables per statement, so the team is never expanded into an IN (?,?,...) list.
+  const TEAM = `WITH RECURSIVE t(id, depth) AS (SELECT id, 1 FROM users WHERE parent_id = ? UNION ALL SELECT x.id, t.depth + 1 FROM users x JOIN t ON x.parent_id = t.id WHERE t.depth < 6)`;
+  const teamSize = await n(`${TEAM} SELECT COUNT(*) AS n FROM t`, [u.id]);
+  const teamNet = await n(`${TEAM} SELECT SUM(net_minor) AS n FROM sales WHERE status='recorded' AND paid_at >= ? AND user_id IN (SELECT id FROM t)`, [u.id, since]);
   return {
     role: u.role, status: u.status, email_verified: !!u.email_verified,
     last_30_days: {
@@ -93,7 +97,7 @@ route('GET', '/v1/me/summary', me, async ({ ctx, actor }) => {
       net_minor: await n("SELECT SUM(net_minor) AS n FROM sales WHERE user_id=? AND status='recorded' AND paid_at>=?", [u.id, since]),
       team_net_minor: teamNet,
     },
-    team_size: team.length,
+    team_size: teamSize,
     balance: await P.balances(ctx, u.id),
     kyc_status: (await U.kycView(ctx, u.id)).status,
   };
@@ -123,7 +127,10 @@ route('GET', '/v1/admin/summary', adm('admin.read'), async ({ ctx }) => {
     owed_minor: (await ctx.db.first('SELECT COALESCE(SUM(amount_minor),0) AS n FROM ledger')).n,
     paid_minor: (await ctx.db.first("SELECT COALESCE(SUM(gross_minor),0) AS n FROM payouts WHERE status='paid'")).n,
     open_payouts: (await ctx.db.first("SELECT COUNT(*) AS n FROM payouts WHERE status IN ('pending_approval','approved','processing')")).n,
-    flagged_refunds: (await ctx.db.first('SELECT COUNT(*) AS n FROM sales WHERE refund_after_maturity=1')).n,
+    flagged_refunds: (await ctx.db.first('SELECT COUNT(*) AS n FROM sales WHERE refund_after_payout=1')).n,
+    open_claims: (await ctx.db.first("SELECT COUNT(*) AS n FROM sales WHERE dispute_status='open'")).n,
+    refunds_without_usage_proof: (await ctx.db.first("SELECT COUNT(*) AS n FROM sales WHERE status='refunded' AND COALESCE(usage_verified,0)=0")).n,
+    payout_mode: ctx.payouts.mode || 'mock',
   };
 });
 
@@ -139,7 +146,10 @@ route('POST', '/v1/admin/users', { ...adm('users.create'), idem: false }, async 
   const status = actor.type === 'owner' ? 'active' : 'pending'; // an AI key can propose staff; the owner approves
   const user = await U.createUser(ctx, { ...(body || {}), status });
   const out = { user: U.publicUser(user) };
-  if (status === 'active') out.api_key = (await createKey(ctx, { kind: 'user', user_id: user.id, label: 'created by owner', created_by: actor.keyId })).token;
+  if (status === 'active') {
+    out.api_key = (await createKey(ctx, { kind: 'user', user_id: user.id, label: 'created by owner', created_by: actor.keyId },
+      { audit: (k) => [{ action: 'key.issue', target: `key:${k.id}`, meta: { kind: 'user', user_id: user.id, via: 'owner-created' } }] })).token;
+  }
   return [201, out];
 });
 
@@ -150,6 +160,10 @@ route('POST', '/v1/admin/users/:id/approve', adm('users.approve'), async ({ ctx,
 route('POST', '/v1/admin/users/:id/suspend', adm('users.suspend'), async ({ ctx, params, body }) => U.publicUser(await U.setStatus(ctx, params.id, 'suspended', body?.why)));
 route('POST', '/v1/admin/users/:id/reinstate', adm('users.approve'), async ({ ctx, params }) => U.publicUser(await U.setStatus(ctx, params.id, 'active', 'reinstated')));
 route('POST', '/v1/admin/users/:id/kyc/review', adm('kyc.verify'), async ({ ctx, params, body }) => U.reviewKyc(ctx, params.id, body?.approve === true, body?.note));
+route('GET', '/v1/admin/users/:id/kyc', adm('kyc.verify'), async ({ ctx, params }) => U.revealKyc(ctx, params.id)); // owner only, audited
+route('POST', '/v1/admin/users/:id/verify-email', adm('kyc.verify'), async ({ ctx, params }) => U.ownerVerifyEmail(ctx, params.id));
+route('POST', '/v1/admin/users/:id/placement', adm('users.approve'), async ({ ctx, params, body }) => U.setPlacement(ctx, params.id, body || {}));
+route('POST', '/v1/admin/users/:id/erase', adm('users.erase'), async ({ ctx, params }) => U.eraseUser(ctx, params.id));
 route('POST', '/v1/admin/users/:id/codes', adm('codes.write'), async ({ ctx, params, body }) => [201, await L.createCode(ctx, null, body || {}, { asAdmin: true, forUserId: params.id })]);
 
 route('GET', '/v1/admin/policy', adm('admin.read'), async ({ ctx }) => getPolicy(ctx));
@@ -171,18 +185,30 @@ route('GET', '/v1/admin/sites', adm('admin.read'), async ({ ctx }) => ({ sites: 
 route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params, body }) => {
   const site = await ctx.db.first('SELECT * FROM sites WHERE id=?', [params.id]);
   if (!site) throw new HttpError(404, 'not_found', 'site not found');
+  const policy = await getPolicy(ctx);
+  const bit = (v) => v === 0 || v === 1;
   const rules = {
     commission_bps: (v) => isInt(v, 0, 5000), refer_bps: (v) => isInt(v, 0, 5000), return_days: (v) => isInt(v, 0, 365), buffer_days: (v) => isInt(v, 0, 60),
-    discount_allowed: (v) => v === 0 || v === 1, max_discount_bps: (v) => isInt(v, 0, 5000), active: (v) => v === 0 || v === 1,
+    discount_allowed: bit, max_discount_bps: (v) => isInt(v, 0, 5000), active: bit, host_confirmed: bit,
+    // a redirect host must be one of the owner's own domains (policy.owned_domains), so a typo or a bad edit can never send partner traffic elsewhere
+    host: (v) => isHostname(v) && hostIsOwned(v, policy.owned_domains),
+    refund_terms: (v) => v === null || (typeof v === 'string' && v.trim().length >= 10 && v.length <= 600),
   };
   const sets = [];
   const vals = [];
-  for (const [k, v] of Object.entries(body || {})) {
+  const b = body || {};
+  for (const [k, v] of Object.entries(b)) {
     if (!rules[k]) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
-    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', `${k} out of range`);
-    sets.push(`${k}=?`); vals.push(v);
+    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'host must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
+    sets.push(`${k}=?`); vals.push(typeof v === 'string' ? v.trim() : v);
   }
   if (!sets.length) throw new HttpError(422, 'invalid_body', 'nothing to change');
+  // A changed host is unconfirmed until the owner says so in the same request; a site can only be switched on while its host is confirmed.
+  const hostChanged = b.host !== undefined && b.host !== site.host;
+  const confirmed = b.host_confirmed ?? (hostChanged ? 0 : site.host_confirmed);
+  if (hostChanged && b.host_confirmed === undefined) { sets.push('host_confirmed=?'); vals.push(0); }
+  if (b.active === 1 && !confirmed) throw new HttpError(409, 'host_unconfirmed', 'confirm the host first (host_confirmed:1) before switching this site on');
+  if (!confirmed && b.active === undefined && site.active === 1) { sets.push('active=?'); vals.push(0); }
   await atomic(ctx, async () => [
     { sql: `UPDATE sites SET ${sets.join(',')} WHERE id=?`, params: [...vals, params.id] },
     ...(await auditStmts(ctx, [{ action: 'site.update', target: `site:${params.id}`, meta: body }])),
@@ -196,9 +222,12 @@ route('GET', '/v1/admin/sites/:id/secret', adm('keys.manage'), async ({ ctx, par
   return { site_id: site.id, secret_version: site.secret_version, signing_secret: await siteSecret(ctx, site) };
 });
 route('POST', '/v1/admin/sites/:id/rotate-secret', adm('keys.manage'), async ({ ctx, params }) => {
-  const r = await ctx.db.run('UPDATE sites SET secret_version = secret_version + 1 WHERE id=?', [params.id]);
-  if (!r.changes) throw new HttpError(404, 'not_found', 'site not found');
-  await atomic(ctx, () => auditStmts(ctx, [{ action: 'site.secret_rotated', target: `site:${params.id}` }]));
+  if (!(await ctx.db.first('SELECT 1 AS x FROM sites WHERE id=?', [params.id]))) throw new HttpError(404, 'not_found', 'site not found');
+  // the rotation and its action-log entry are one atomic batch: no unaudited secret change is possible
+  await atomic(ctx, async () => [
+    { sql: 'UPDATE sites SET secret_version = secret_version + 1 WHERE id=?', params: [params.id] },
+    ...(await auditStmts(ctx, [{ action: 'site.secret_rotated', target: `site:${params.id}` }])),
+  ]);
   return { rotated: true };
 });
 
@@ -207,13 +236,12 @@ route('GET', '/v1/admin/keys', adm('keys.manage'), async ({ ctx }) => ({
 }));
 route('POST', '/v1/admin/keys', { ...adm('keys.manage'), idem: false }, async ({ ctx, actor, body }) => {
   const b = body || {};
-  const k = await createKey(ctx, { kind: b.kind, user_id: b.user_id, site_id: b.site_id, label: b.label ? String(b.label).slice(0, 80) : null, scopes: b.scopes, rate_per_min: b.rate_per_min ?? 120, created_by: actor.keyId });
-  await atomic(ctx, () => auditStmts(ctx, [{ action: 'key.create', target: `key:${k.id}`, meta: { kind: k.kind, scopes: k.scopes } }]));
+  const k = await createKey(ctx, { kind: b.kind, user_id: b.user_id, site_id: b.site_id, label: b.label ? String(b.label).slice(0, 80) : null, scopes: b.scopes, rate_per_min: b.rate_per_min ?? 120, created_by: actor.keyId },
+    { audit: (made) => [{ action: 'key.create', target: `key:${made.id}`, meta: { kind: made.kind, scopes: made.scopes } }] });
   return [201, { id: k.id, kind: k.kind, scopes: k.scopes, token: k.token, note: 'Shown once. Store it in a secret manager.' }];
 });
 route('DELETE', '/v1/admin/keys/:id', adm('keys.manage'), async ({ ctx, params }) => {
-  await revokeKey(ctx, params.id);
-  await atomic(ctx, () => auditStmts(ctx, [{ action: 'key.revoke', target: `key:${params.id}` }]));
+  await revokeKey(ctx, params.id, { audit: [{ action: 'key.revoke', target: `key:${params.id}` }] });
   return { revoked: true };
 });
 
@@ -223,11 +251,19 @@ route('GET', '/v1/admin/audit', adm('admin.read'), async ({ ctx, url }) => {
   const rows = await ctx.db.all(`SELECT seq,ts,actor_type,actor_id,key_id,action,target,meta FROM audit_log ${actorType ? 'WHERE actor_type=?' : ''} ORDER BY seq DESC LIMIT ?`, actorType ? [actorType, limit] : [limit]);
   return { entries: rows.map((r) => ({ ...r, meta: r.meta ? JSON.parse(r.meta) : null })) };
 });
-route('GET', '/v1/admin/verify', adm('admin.read'), async ({ ctx }) => ({ ledger: await verifyLedger(ctx.db), audit: await verifyAudit(ctx.db) }));
+// Default = incremental: re-checks the saved checkpoint, then verifies up to 2000 newer rows per chain (cheap enough for the free tier).
+// ?full=1 re-hashes everything from genesis (can be heavy once the tables are large; run it off-peak).
+route('GET', '/v1/admin/verify', adm('admin.read'), async ({ ctx, url }) => {
+  const opts = url.searchParams.get('full') === '1' ? {} : { incremental: true, now: ctx.now() };
+  return { ledger: await verifyLedger(ctx.db, opts), audit: await verifyAudit(ctx.db, opts) };
+});
+
+route('POST', '/v1/admin/maintenance/purge', adm('maintenance.run'), async ({ ctx }) => purgeExpired(ctx));
 
 route('GET', '/v1/admin/payouts', adm('admin.read'), async ({ ctx, url }) => {
   const st = url.searchParams.get('status');
-  return { payouts: (await ctx.db.all(`SELECT * FROM payouts ${st ? 'WHERE status=?' : ''} ORDER BY created_at DESC LIMIT 200`, st ? [st] : [])).map(P.payoutView) };
+  const rows = await ctx.db.all(`SELECT p.*, u.name FROM payouts p JOIN users u ON u.id = p.user_id ${st ? 'WHERE p.status=?' : ''} ORDER BY p.created_at DESC LIMIT 200`, st ? [st] : []);
+  return { payouts: rows.map((p) => ({ ...P.payoutView(p), name: p.name })) };
 });
 route('POST', '/v1/admin/payouts/:id/approve', adm('payouts.approve'), async ({ ctx, params }) => P.approvePayout(ctx, params.id));
 route('POST', '/v1/admin/payouts/:id/reject', adm('payouts.approve'), async ({ ctx, params, body }) => P.rejectPayout(ctx, params.id, body?.note));
@@ -237,9 +273,23 @@ route('POST', '/v1/admin/payouts/:id/mark-paid', adm('payouts.approve'), async (
   if (p && p.provider !== 'manual') throw new HttpError(409, 'not_manual', 'only manually-paid payouts are recorded by hand; provider payouts settle through the provider webhook');
   return P.markPaid(ctx, params.id, needStr(body?.reference, 'reference', 80));
 });
+route('POST', '/v1/admin/payouts/:id/mark-failed', adm('payouts.approve'), async ({ ctx, params, body }) => P.markFailed(ctx, params.id, body?.reason ? String(body.reason).slice(0, 200) : 'marked failed by owner'));
+route('GET', '/v1/admin/payouts/:id/destination', adm('payouts.approve'), async ({ ctx, params }) => P.revealPayoutDestination(ctx, params.id)); // owner only, audited
 route('POST', '/v1/admin/payouts/:id/mock-settle', adm('payouts.approve'), async ({ ctx, params }) => {
   if (ctx.payouts.mode !== 'mock') throw new HttpError(403, 'not_mock', 'mock settlement exists only in mock payout mode');
   return P.markPaid(ctx, params.id, `UTR_MOCK_${params.id.slice(-8)}`);
+});
+
+// Claims / chargebacks. Razorpay's payment.dispute.* events do this automatically; these let the owner hold or resolve one by hand.
+route('GET', '/v1/admin/claims', adm('admin.read'), async ({ ctx }) => ({
+  claims: await ctx.db.all('SELECT id,site_id,order_id,net_minor,dispute_status,dispute_note,disputed_at,user_id FROM sales WHERE dispute_status IS NOT NULL ORDER BY disputed_at DESC LIMIT 200'),
+}));
+route('POST', '/v1/admin/sales/:id/claim', adm('disputes.resolve'), async ({ ctx, params, body }) => {
+  const sale = await ctx.db.first('SELECT * FROM sales WHERE id=?', [params.id]);
+  if (!sale) throw new HttpError(404, 'not_found', 'sale not found');
+  const state = { hold: 'open', won: 'won', lost: 'lost' }[body?.action];
+  if (!state) throw new HttpError(422, 'invalid_field', 'action must be hold, won or lost');
+  return S.setDispute(ctx, sale, state, body?.note);
 });
 
 route('GET', '/v1/admin/schemes', adm('admin.read'), async ({ ctx }) => ({ schemes: await SC.listSchemes(ctx, false) }));
@@ -269,16 +319,20 @@ async function idempotent(ctx, scopeKey, rawBody, run) {
     return { status: prev.status, data: JSON.parse(prev.body), replay: true };
   }
   const out = await run();
-  if (Math.random() < 0.02) await ctx.db.run('DELETE FROM idempotency WHERE created_at < ?', [ctx.now() - 7 * 86400000]); // opportunistic cleanup
+  if (Math.random() < 0.01) await purgeExpired(ctx, { audit: false }).catch(() => {}); // opportunistic retention sweep (the explicit endpoint is the reliable path)
   if (out.status < 500) {
     await ctx.db.run('INSERT OR IGNORE INTO idempotency (scope,req_hash,status,body,created_at) VALUES (?,?,?,?,?)', [scopeKey, reqHash, out.status, JSON.stringify(out.data), ctx.now()]);
   }
   return out;
 }
 
-export async function handle(ctx, req) {
+export async function handle(baseCtx, req) {
+  // Every request gets its own ctx object, so the acting identity can never leak from one concurrent request into another
+  // (the local dev server shares one base ctx across all requests; the Pages Function already builds a fresh one each time).
+  const ctx = { ...baseCtx, actor: null };
   const url = new URL(req.url);
   const path = url.pathname;
+  let match = null;
   try {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', ...SEC_HEADERS } });
 
@@ -289,7 +343,6 @@ export async function handle(ctx, req) {
       return new Response(null, { status: 302, headers: { location: to, 'cache-control': 'no-store', ...SEC_HEADERS } });
     }
 
-    let match = null;
     let params = {};
     let pathMatched = false;
     for (const r of routes) {
@@ -317,6 +370,7 @@ export async function handle(ctx, req) {
       requireKind(actor, 'user');
     } else if (o.auth === 'admin') {
       actor = await authenticate(ctx, req);
+      if (actor) ctx.actor = actor; // so a refused attempt by a valid key is attributed to that key in the action log
       requireKind(actor, 'owner', 'ai');
       requireScope(actor, o.scope);
       if (actor.type === 'ai' && OWNER_ONLY_SCOPES.includes(o.scope)) throw new HttpError(403, 'forbidden', 'only the owner can do this');
@@ -333,6 +387,8 @@ export async function handle(ctx, req) {
     }
 
     const call = async () => {
+      // Everything the AI master reads about partners is recorded (writes are already audited by their own handlers).
+      if (actor?.type === 'ai' && req.method === 'GET') await audit(ctx, 'ai.read', `${path}${url.search}`.slice(0, 200), null);
       let out = await match.fn({ ctx, req, url, params, body, rawBody, actor });
       let status = 200;
       if (Array.isArray(out) && typeof out[0] === 'number') [status, out] = out;
@@ -350,8 +406,21 @@ export async function handle(ctx, req) {
     if (res.replay) headers['idempotent-replay'] = 'true';
     return json(res.data, res.status, headers);
   } catch (e) {
+    await logDenied(ctx, req, path, match, e);
     return errorResponse(e);
   }
+}
+
+/**
+ * Refused attempts on owner/AI routes go in the action log: a valid key that is not allowed to do this (403) every time, and
+ * missing/invalid keys (401) at most 20 per IP per hour so a flood of junk requests cannot fill the log.
+ */
+async function logDenied(ctx, req, path, match, e) {
+  try {
+    if (!(e instanceof HttpError) || ![401, 403].includes(e.status) || match?.opts?.auth !== 'admin') return;
+    if (e.status === 401) await rateLimit(ctx, `denied:${clientIp(req) || 'unknown'}`, 20, 3600000);
+    await audit(ctx, 'access.denied', `${req.method} ${path}`.slice(0, 200), { status: e.status, code: e.code });
+  } catch { /* logging must never change the response */ }
 }
 
 export function errorResponse(e) {

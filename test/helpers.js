@@ -20,6 +20,8 @@ export async function mk(opts = {}) {
   const { raw, db } = openDb();
   const clock = { t: T0 };
   await seedSites(db, T0);
+  // stands in for the owner confirming the best-guess hosts (see policy.js DEFAULT_SITES): tests exercise every site
+  await db.run('UPDATE sites SET active=1, host_confirmed=1');
   const mailer = nullMailer();
   const payouts = opts.payouts || mockPayoutAdapter();
   const ctx = makeCtx({ db, env: { ...ENV, ...(opts.env || {}) }, now: () => clock.t, mailer, payouts });

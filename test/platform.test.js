@@ -13,9 +13,10 @@ import { ENV, mk } from './helpers.js';
 
 /** Minimal D1 look-alike: prepare().bind().all()/first()/run() and batch() as one transaction, over node:sqlite. */
 function fakeD1(raw) {
+  // Real D1 rejects a statement with more than 100 bound values; node:sqlite would accept ~32k. Model the stricter limit.
   const mkStmt = (sql, params = []) => ({
     sql, params,
-    bind: (...p) => mkStmt(sql, p),
+    bind: (...p) => { if (p.length > 100) throw new Error('D1_ERROR: too many SQL variables (limit 100)'); return mkStmt(sql, p); },
     all: async () => ({ results: raw.prepare(sql).all(...params).map((r) => ({ ...r })) }),
     first: async () => { const r = raw.prepare(sql).get(...params); return r ? { ...r } : null; },
     run: async () => { const r = raw.prepare(sql).run(...params); return { meta: { changes: Number(r.changes) } }; },
@@ -33,6 +34,7 @@ function fakeD1(raw) {
 test('Pages Function on the D1 adapter: register, link, signed sale, owner approval, chains intact', async () => {
   const { raw, db } = openDb();
   await seedSites(db);
+  await db.run('UPDATE sites SET active=1, host_confirmed=1');
   const d1 = fakeD1(raw);
   const env = { DB: d1, ...ENV };
   const seedCtx = makeCtx({ db: d1Db(d1), env });
@@ -80,18 +82,18 @@ test('Pages Function fails closed when secrets are missing (never runs with an e
 
 test('migrations: apply cleanly to an empty database, in order, once; tables and append-only triggers exist', () => {
   const files = migrationFiles();
-  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql']);
+  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql', '0003_hardening.sql']);
   const raw = new DatabaseSync(':memory:');
   for (const f of files) raw.exec(f.sql);
   const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-  for (const t of ['sites', 'users', 'user_kyc', 'api_keys', 'links', 'codes', 'clicks', 'leads', 'sales', 'razorpay_events', 'payouts', 'payout_items', 'ledger', 'audit_log', 'policy', 'idempotency', 'rate_limits', 'email_codes', 'schemes']) {
+  for (const t of ['sites', 'users', 'user_kyc', 'api_keys', 'links', 'codes', 'clicks', 'leads', 'sales', 'razorpay_events', 'payouts', 'payout_items', 'ledger', 'audit_log', 'policy', 'idempotency', 'rate_limits', 'email_codes', 'schemes', 'chain_checkpoints']) {
     assert.ok(tables.includes(t), `table ${t}`);
   }
   const triggers = raw.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all().map((r) => r.name).sort();
   assert.deepEqual(triggers, ['audit_no_delete', 'audit_no_update', 'ledger_no_delete', 'ledger_no_update']);
   // re-opening an already-migrated file database does not re-run migrations
   const again = openDb();
-  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 2);
+  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 3);
 });
 
 test('schema constraints: one open payout per user, unique order per site, sales amounts and roles checked by the database itself', async () => {

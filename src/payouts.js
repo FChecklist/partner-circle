@@ -1,22 +1,26 @@
 // Balances, payout requests, the owner approval queue and payout settlement.
 //
 // Rules (owner, 9-11 Nov): a commission is payable only when (1) the sale is recorded and not refunded, (2) Razorpay confirmed
-// the same payment, and (3) eligible_at has passed (return window + 7-day buffer). No clawback after a payout.
-// Every payout needs the owner's approval; the AI can prepare but never approve. Payout RECORDING lives here; the money
-// movement itself goes through ctx.payouts (mock by default).
+// the same payment, (3) no claim/chargeback is open on it, and (4) eligible_at has passed (return window + 7-day buffer).
+// No clawback after a payout is SENT. Every payout needs the owner's approval; the AI can prepare but never approve.
+// Payout RECORDING lives here; the money movement itself goes through ctx.payouts (mock by default).
+//
+// The destination (UPI id / bank account) is copied, encrypted, onto the payout when it is requested and only that copy is ever paid to,
+// so editing the partner's KYC afterwards cannot redirect an existing payout.
 
-import { HttpError, newId, mask } from './util.js';
+import { HttpError, newId, encryptField, decryptField } from './util.js';
 import { atomic, auditStmts, ledgerStmts } from './chain.js';
 import { getPolicy } from './policy.js';
-import { decryptKyc } from './users.js';
+import { decryptKyc, kycReviewView, destinationHint } from './users.js';
 import { reconcilePending } from './sales.js';
+import { notify } from './notify.js';
 
 const OPEN = ['pending_approval', 'approved', 'processing'];
 
 const AVAILABLE_SQL = `
   FROM ledger l LEFT JOIN sales s ON s.id = l.sale_id
  WHERE l.account_id = ? AND l.eligible_at <= ?
-   AND ((l.kind IN ('commission','override') AND s.status = 'recorded' AND s.rzp_status = 'confirmed') OR l.kind = 'adjustment')
+   AND ((l.kind IN ('commission','override') AND s.status = 'recorded' AND s.rzp_status = 'confirmed' AND COALESCE(s.dispute_status,'') <> 'open') OR l.kind = 'adjustment')
    AND NOT EXISTS (SELECT 1 FROM payout_items pi WHERE pi.ledger_seq = l.seq)`;
 
 export async function availableEntries(ctx, userId) {
@@ -32,6 +36,7 @@ export async function balances(ctx, userId) {
        AND ((l.kind IN ('commission','override') AND s.status = 'recorded') OR l.kind = 'adjustment')`;
   const pendingAll = await sum(`SELECT SUM(l.amount_minor) AS n ${live}`, [userId]);
   const awaitingRzp = await sum(`SELECT SUM(l.amount_minor) AS n ${live} AND l.kind <> 'adjustment' AND l.eligible_at <= ? AND s.rzp_status <> 'confirmed'`, [userId, now]);
+  const onClaim = await sum(`SELECT SUM(l.amount_minor) AS n ${live} AND l.kind <> 'adjustment' AND s.dispute_status = 'open'`, [userId]);
   const inPayout = await sum(`SELECT SUM(gross_minor) AS n FROM payouts WHERE user_id=? AND status IN ('pending_approval','approved','processing')`, [userId]);
   const paid = await sum(`SELECT SUM(gross_minor) AS n FROM payouts WHERE user_id=? AND status='paid'`, [userId]);
   const ledgerTotal = await sum('SELECT SUM(amount_minor) AS n FROM ledger WHERE account_id=?', [userId]);
@@ -39,6 +44,7 @@ export async function balances(ctx, userId) {
     available_minor: available,
     pending_minor: pendingAll - available,
     awaiting_razorpay_minor: awaitingRzp,
+    on_claim_minor: onClaim,
     in_payout_minor: inPayout,
     paid_minor: paid,
     ledger_total_minor: ledgerTotal, // always equals available + pending: the double-entry self-check
@@ -47,8 +53,8 @@ export async function balances(ctx, userId) {
 
 export const payoutView = (p) => ({
   id: p.id, user_id: p.user_id, gross_minor: p.gross_minor, tds_bps: p.tds_bps, tds_minor: p.tds_minor, net_minor: p.net_minor, status: p.status,
-  method: p.method, destination_masked: p.destination_masked, provider: p.provider, provider_ref: p.provider_ref, paid_ref: p.paid_ref,
-  paid_at: p.paid_at, approved_at: p.approved_at, note: p.note, created_at: p.created_at,
+  method: p.method, destination_masked: p.destination_masked, provider: p.provider, provider_mode: p.provider_mode ?? null, provider_ref: p.provider_ref, paid_ref: p.paid_ref,
+  paid_at: p.paid_at, approved_at: p.approved_at, note: p.note, created_at: p.created_at, reversed_at: p.reversed_at ?? null,
 });
 
 export async function requestPayout(ctx, user) {
@@ -72,12 +78,14 @@ export async function requestPayout(ctx, user) {
   const tdsBps = india ? policy.tds_bps_default : 0;
   const tds = Math.floor((gross * tdsBps) / 10000);
   const id = newId('po');
+  const snapshot = india ? { upi_id: kyc.upi_id } : { bank_account: kyc.bank_account, bank_ifsc_swift: kyc.bank_ifsc_swift, bank_name: kyc.bank_name };
+  const destEnc = await encryptField(ctx.secret('KYC_KEY'), JSON.stringify({ ...snapshot, name: user.name }));
   try {
     await atomic(ctx, async () => [
       {
-        sql: `INSERT INTO payouts (id,user_id,gross_minor,tds_bps,tds_minor,net_minor,status,requested_by_key,method,destination_masked,created_at)
-              VALUES (?,?,?,?,?,?, 'pending_approval', ?,?,?,?)`,
-        params: [id, user.id, gross, tdsBps, tds, gross - tds, ctx.actor?.keyId || 'system', method, mask(india ? kyc.upi_id : kyc.bank_account, 4), ctx.now()],
+        sql: `INSERT INTO payouts (id,user_id,gross_minor,tds_bps,tds_minor,net_minor,status,requested_by_key,method,destination_masked,dest_enc,created_at)
+              VALUES (?,?,?,?,?,?, 'pending_approval', ?,?,?,?,?)`,
+        params: [id, user.id, gross, tdsBps, tds, gross - tds, ctx.actor?.keyId || 'system', method, destinationHint(kyc, india), destEnc, ctx.now()],
       },
       ...entries.map((e) => ({ sql: 'INSERT INTO payout_items (ledger_seq,payout_id,amount_minor) VALUES (?,?,?)', params: [e.seq, id, e.amount_minor] })),
       ...(await ledgerStmts(ctx, [{ account_id: user.id, kind: 'payout_reserve', amount_minor: -gross, payout_id: id, eligible_at: ctx.now(), ref: `reserve:${id}`, memo: 'payout requested' }])),
@@ -96,12 +104,22 @@ async function getPayout(ctx, id) {
   return p;
 }
 
-/** Release the reserved balance back to the partner (rejected or failed payout) and free its ledger entries. */
+/** The frozen destination of a payout, decrypted. Owner-only (the manual, non-India payment needs it). Every reveal is audited. */
+export async function revealPayoutDestination(ctx, id) {
+  const p = await getPayout(ctx, id);
+  if (!p.dest_enc) throw new HttpError(404, 'not_found', 'no destination stored for this payout');
+  await atomic(ctx, () => auditStmts(ctx, [{ action: 'payout.destination_revealed', target: `payout:${id}` }]));
+  return { payout_id: id, method: p.method, net_minor: p.net_minor, destination: JSON.parse(await decryptField(ctx.secret('KYC_KEY'), p.dest_enc)) };
+}
+
+/** Release the reserved balance back to the partner (rejected, failed or reversed payout) and free its ledger entries. */
 async function releaseStmts(ctx, p, why) {
-  // A sale refunded while its commission sat in this (now released) payout must not become payable again: void it now.
+  // A sale refunded while its commission sat in this (now released) payout must not become payable again: void it now
+  // (unless the refund already voided it).
   const refunded = await ctx.db.all(
     `SELECT l.id, l.account_id, l.amount_minor, l.sale_id, l.eligible_at FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq
-       JOIN sales s ON s.id = l.sale_id WHERE pi.payout_id=? AND s.status='refunded'`, [p.id]);
+       JOIN sales s ON s.id = l.sale_id WHERE pi.payout_id=? AND s.status='refunded'
+        AND NOT EXISTS (SELECT 1 FROM ledger v WHERE v.ref = 'void:' || l.id)`, [p.id]);
   return [
     { sql: 'DELETE FROM payout_items WHERE payout_id=?', params: [p.id] },
     ...(await ledgerStmts(ctx, [
@@ -119,6 +137,7 @@ export async function rejectPayout(ctx, id, note) {
     ...(await releaseStmts(ctx, p, 'payout rejected')),
     ...(await auditStmts(ctx, [{ action: 'payout.reject', target: `payout:${id}`, meta: { note: note || null } }])),
   ]);
+  await notify(ctx, p.user_id, 'Your payout request was not approved', 'Your payout request was not approved this time. The money is back in your balance.');
   return payoutView(await getPayout(ctx, id));
 }
 
@@ -147,17 +166,18 @@ export async function executePayout(ctx, id) {
     ]);
     return payoutView(await getPayout(ctx, id));
   }
-  const kyc = await decryptKyc(ctx, p.user_id);
+  if (!p.dest_enc) throw new HttpError(409, 'no_destination', 'this payout has no stored destination');
+  const destination = JSON.parse(await decryptField(ctx.secret('KYC_KEY'), p.dest_enc));
   let res;
   try {
-    res = await ctx.payouts.createPayout({ payout_id: p.id, amount_minor: p.net_minor, method: p.method, destination: kyc, name: user.name });
+    res = await ctx.payouts.createPayout({ payout_id: p.id, amount_minor: p.net_minor, method: p.method, destination, name: user.name });
   } catch (e) {
     await atomic(ctx, () => auditStmts(ctx, [{ action: 'payout.execute_failed', target: `payout:${id}`, meta: { error: String(e.message).slice(0, 200) } }]));
     throw e instanceof HttpError ? e : new HttpError(502, 'provider_error', 'the payout provider call failed; the payout stays approved and can be retried');
   }
   await atomic(ctx, async () => [
-    { sql: "UPDATE payouts SET status='processing', provider=?, provider_ref=? WHERE id=? AND status='approved'", params: [res.provider, res.provider_ref, id] },
-    ...(await auditStmts(ctx, [{ action: 'payout.submitted', target: `payout:${id}`, meta: { provider: res.provider, provider_ref: res.provider_ref } }])),
+    { sql: "UPDATE payouts SET status='processing', provider=?, provider_ref=?, provider_mode=? WHERE id=? AND status='approved'", params: [res.provider, res.provider_ref, res.mode || ctx.payouts.mode || null, id] },
+    ...(await auditStmts(ctx, [{ action: 'payout.submitted', target: `payout:${id}`, meta: { provider: res.provider, provider_ref: res.provider_ref, mode: res.mode || ctx.payouts.mode || null } }])),
   ]);
   if (res.status === 'paid') return markPaid(ctx, id, res.provider_ref);
   return payoutView(await getPayout(ctx, id));
@@ -171,18 +191,27 @@ export async function markPaid(ctx, id, utr) {
     { sql: "UPDATE payouts SET status='paid', paid_ref=?, paid_at=? WHERE id=? AND status IN ('processing','approved')", params: [utr || null, ctx.now(), id] },
     ...(await auditStmts(ctx, [{ action: 'payout.paid', target: `payout:${id}`, meta: { paid_ref: utr || null, gross_minor: p.gross_minor, net_minor: p.net_minor } }])),
   ]);
+  await notify(ctx, p.user_id, 'Your payout has been sent', `Your payout of ${(p.net_minor / 100).toFixed(2)} rupees has been sent${utr ? ` (reference ${utr})` : ''}.`);
   return payoutView(await getPayout(ctx, id));
 }
 
-export async function markFailed(ctx, id, reason) {
+/**
+ * The payout did not arrive: release the money back to the partner. With { reversal: true } this is also allowed on a payout we had
+ * already marked 'paid' (the provider reversed it afterwards): status goes to 'failed' with reversed_at set, the reserve is released,
+ * and the original paid_ref / paid_at stay on the row as history.
+ */
+export async function markFailed(ctx, id, reason, { reversal = false } = {}) {
   const p = await getPayout(ctx, id);
   if (p.status === 'failed') return payoutView(p);
-  if (!['approved', 'processing'].includes(p.status)) throw new HttpError(409, 'bad_state', `a ${p.status} payout cannot be marked failed`);
+  const allowed = reversal ? ['approved', 'processing', 'paid'] : ['approved', 'processing'];
+  if (!allowed.includes(p.status)) throw new HttpError(409, 'bad_state', `a ${p.status} payout cannot be marked failed`);
+  const wasPaid = p.status === 'paid';
   await atomic(ctx, async () => [
-    { sql: "UPDATE payouts SET status='failed', note=? WHERE id=? AND status IN ('approved','processing')", params: [reason || null, id] },
-    ...(await releaseStmts(ctx, p, 'payout failed')),
-    ...(await auditStmts(ctx, [{ action: 'payout.failed', target: `payout:${id}`, meta: { reason: reason || null } }])),
+    { sql: `UPDATE payouts SET status='failed', note=?, reversed_at=? WHERE id=? AND status IN (${allowed.map((s) => `'${s}'`).join(',')})`, params: [reason || null, wasPaid ? ctx.now() : null, id] },
+    ...(await releaseStmts(ctx, p, wasPaid ? 'payout reversed by the provider' : 'payout failed')),
+    ...(await auditStmts(ctx, [{ action: wasPaid ? 'payout.reversed' : 'payout.failed', target: `payout:${id}`, meta: { reason: reason || null, was_paid: wasPaid } }])),
   ]);
+  await notify(ctx, p.user_id, 'Your payout could not be completed', 'Your payout could not be completed. The money is back in your balance and you can request it again.');
   return payoutView(await getPayout(ctx, id));
 }
 
@@ -192,17 +221,25 @@ export async function listPayouts(ctx, userId) {
 
 /** The owner's queue: what is waiting on a decision, with enough context to decide. */
 export async function approvalQueue(ctx) {
+  const policy = await getPolicy(ctx);
   const partners = await ctx.db.all("SELECT * FROM users WHERE status='pending' ORDER BY created_at");
-  const kyc = await ctx.db.all("SELECT k.user_id, k.country, k.submitted_at, u.name, u.handle FROM user_kyc k JOIN users u ON u.id = k.user_id WHERE k.status='submitted' ORDER BY k.submitted_at");
+  const kycRows = await ctx.db.all("SELECT k.user_id, k.country, k.submitted_at, u.name, u.handle FROM user_kyc k JOIN users u ON u.id = k.user_id WHERE k.status='submitted' ORDER BY k.submitted_at");
+  const kyc = [];
+  for (const k of kycRows) kyc.push({ ...k, details: await kycReviewView(ctx, k.user_id) });
   const payouts = await ctx.db.all(
     `SELECT p.*, u.name, u.handle,
         (SELECT COUNT(*) FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq JOIN sales s ON s.id = l.sale_id
-          WHERE pi.payout_id = p.id AND s.refund_after_maturity = 1) AS flagged_refunds
+          WHERE pi.payout_id = p.id AND s.refund_after_payout = 1) AS flagged_refunds
        FROM payouts p JOIN users u ON u.id = p.user_id WHERE p.status = 'pending_approval' ORDER BY p.created_at`);
+  const claims = await ctx.db.all(
+    `SELECT s.id, s.site_id, s.order_id, s.net_minor, s.disputed_at, s.dispute_note, u.name FROM sales s LEFT JOIN users u ON u.id = s.user_id
+      WHERE s.dispute_status = 'open' ORDER BY s.disputed_at`);
   return {
     partners: partners.map((u) => ({ id: u.id, role: u.role, name: u.name, handle: u.handle, country: u.country, created_at: u.created_at })),
     kyc,
     payouts: payouts.map((p) => ({ ...payoutView(p), name: p.name, handle: p.handle, flagged_refunds: p.flagged_refunds })),
+    claims,
+    tds_confirmed: !!policy.tds_confirmed,
   };
 }
 

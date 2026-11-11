@@ -34,6 +34,17 @@ if (!(await db.first("SELECT 1 AS x FROM api_keys WHERE kind='owner'"))) {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' };
 const PUB = join(ROOT, 'public');
+// Send the same security headers Cloudflare Pages will apply from public/_headers (CSP included), so what works here works deployed.
+const staticHeaders = (() => {
+  const out = {};
+  let inAll = false;
+  for (const line of readFileSync(join(PUB, '_headers'), 'utf8').split(/\r?\n/)) {
+    if (/^\S/.test(line)) { inAll = line.trim() === '/*'; continue; }
+    const m = inAll && /^\s+([A-Za-z-]+):\s*(.+)$/.exec(line);
+    if (m) out[m[1].toLowerCase()] = m[2].trim();
+  }
+  return out;
+})();
 const port = Number(process.env.PORT || 8788);
 
 http.createServer(async (req, res) => {
@@ -61,7 +72,7 @@ http.createServer(async (req, res) => {
     const p = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
     const file = normalize(join(PUB, p));
     if (!file.startsWith(PUB + sep) || !existsSync(file)) { res.writeHead(404); return res.end('not found'); }
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
+    res.writeHead(200, { ...staticHeaders, 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(readFileSync(file));
   } catch (e) {
     console.error(e);

@@ -102,7 +102,7 @@ test('/v1/public/sites exposes only what a signup page needs, with CORS for the 
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('access-control-allow-origin'), '*');
   assert.equal(r.data.length, 9);
-  assert.deepEqual(Object.keys(r.data[0]).sort(), ['discount_allowed', 'host', 'id', 'max_discount_bps', 'name', 'return_days']);
+  assert.deepEqual(Object.keys(r.data[0]).sort(), ['discount_allowed', 'host', 'id', 'max_discount_bps', 'name', 'refund_terms', 'return_days']);
 });
 
 test('site signing secret is derived (never stored), revealable only by the owner, and rotating it invalidates the old one', async () => {

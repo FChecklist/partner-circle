@@ -139,6 +139,14 @@ export async function executePayout(ctx, id) {
   const p = await getPayout(ctx, id);
   if (p.status !== 'approved') throw new HttpError(409, 'bad_state', `payout is ${p.status}, not approved`);
   const user = await ctx.db.first('SELECT * FROM users WHERE id=?', [p.user_id]);
+  if (user.country !== 'IN') {
+    // RazorpayX pays Indian UPI/IMPS only. Cross-border payouts are recorded here and paid by the owner outside the API.
+    await atomic(ctx, async () => [
+      { sql: "UPDATE payouts SET status='processing', provider='manual' WHERE id=? AND status='approved'", params: [id] },
+      ...(await auditStmts(ctx, [{ action: 'payout.manual', target: `payout:${id}`, meta: { country: user.country, note: 'pay outside the API, then POST /v1/admin/payouts/:id/mark-paid' } }])),
+    ]);
+    return payoutView(await getPayout(ctx, id));
+  }
   const kyc = await decryptKyc(ctx, p.user_id);
   let res;
   try {

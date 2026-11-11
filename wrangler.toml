@@ -1,0 +1,15 @@
+# Cloudflare Pages + D1 (free tier). Nothing here is deployed. Replace database_id after `wrangler d1 create partner-circle`.
+name = "partner-circle"
+pages_build_output_dir = "public"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "partner-circle"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Secrets are NOT set here. Use `wrangler pages secret put NAME`:
+#   PC_PEPPER, SITE_SECRET_MASTER, RAZORPAY_WEBHOOK_SECRET, KYC_KEY        (required, 32+ random chars each)
+#   RESEND_API_KEY, MAIL_FROM                                              (optional: real e-mail via the existing Resend setup)
+#   PAYOUT_MODE=test|live, RAZORPAYX_KEY_ID, RAZORPAYX_KEY_SECRET, RAZORPAYX_ACCOUNT_NUMBER   (optional: leave unset for the mock provider)

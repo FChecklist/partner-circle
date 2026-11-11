@@ -10,6 +10,7 @@ export const POLICY_DEFAULTS = {
   override_bps: { exec: 100, leader: 75, manager: 50 },
   max_codes_per_user: 20,
   code_default_days: 30,
+  deal_protection_days: 14,
   scheme_hold_days: 37,
   // Tax deducted at payout (India Sec 194H etc.) is recorded per payout; default 0 until a CA confirms the rate.
   tds_bps_default: 0,
@@ -21,6 +22,7 @@ export const POLICY_VALIDATORS = {
   min_payout_minor: (v) => Number.isInteger(v) && v >= 0 && v <= 10000000,
   override_bps: (v) => v && typeof v === 'object' && ['exec', 'leader', 'manager'].every((k) => Number.isInteger(v[k]) && v[k] >= 0 && v[k] <= 2000) && Object.keys(v).length === 3,
   max_codes_per_user: (v) => Number.isInteger(v) && v >= 0 && v <= 200,
+  deal_protection_days: (v) => Number.isInteger(v) && v >= 0 && v <= 90,
   code_default_days: (v) => Number.isInteger(v) && v >= 1 && v <= 365,
   scheme_hold_days: (v) => Number.isInteger(v) && v >= 0 && v <= 120,
   tds_bps_default: (v) => Number.isInteger(v) && v >= 0 && v <= 3000,

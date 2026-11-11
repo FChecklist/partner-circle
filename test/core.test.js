@@ -124,18 +124,24 @@ test('site key can read but not post sales (sales need a signature)', async () =
   assert.equal(r.status, 401);
 });
 
-test('Idempotency-Key replays the stored answer and rejects a different body', async () => {
+test('Idempotency-Key replays the stored answer and rejects a different body; key-bearing routes are never cached', async () => {
   const h = await mk();
-  const a = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Ira' }, headers: { 'idempotency-key': 'k-1' } });
-  const b = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Ira' }, headers: { 'idempotency-key': 'k-1' } });
+  const body = { name: 'Week', period: 'weekly', metric: 'sales_count', target: 2, bonus_minor: 100, starts_at: h.clock.t, ends_at: h.clock.t + 1000 };
+  const a = await h.call('POST', '/v1/admin/schemes', { key: h.owner, body, headers: { 'idempotency-key': 'k-1' } });
+  const b = await h.call('POST', '/v1/admin/schemes', { key: h.owner, body, headers: { 'idempotency-key': 'k-1' } });
   assert.equal(a.status, 201);
   assert.equal(b.status, 201);
   assert.equal(b.headers.get('idempotent-replay'), 'true');
-  assert.equal(a.data.user.id, b.data.user.id);
-  assert.equal((await h.db.first('SELECT COUNT(*) AS n FROM users')).n, 1);
-  const c = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Different' }, headers: { 'idempotency-key': 'k-1' } });
+  assert.equal(a.data.id, b.data.id);
+  assert.equal((await h.db.first('SELECT COUNT(*) AS n FROM schemes')).n, 1);
+  const c = await h.call('POST', '/v1/admin/schemes', { key: h.owner, body: { ...body, name: 'Different' }, headers: { 'idempotency-key': 'k-1' } });
   assert.equal(c.status, 422);
   assert.equal(c.data.error.code, 'idempotency_conflict');
+  // responses that carry a login key must never be stored in the idempotency table
+  await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Ira' }, headers: { 'idempotency-key': 'k-2' } });
+  await h.call('POST', '/v1/admin/keys', { key: h.owner, body: { kind: 'ai' }, headers: { 'idempotency-key': 'k-3' } });
+  const stored = JSON.stringify(await h.db.all('SELECT * FROM idempotency'));
+  assert.ok(!stored.includes('pck_'), 'no API key may sit in the idempotency table');
 });
 
 test('input handling: bad JSON, huge body, unknown route, wrong method; errors never leak internals', async () => {

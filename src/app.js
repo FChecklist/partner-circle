@@ -9,6 +9,7 @@ import * as L from './links.js';
 import * as S from './sales.js';
 import * as P from './payouts.js';
 import * as SC from './schemes.js';
+import * as PR from './prospects.js';
 import { handleRazorpayWebhook } from './razorpay.js';
 
 const MAX_BODY = 64 * 1024;
@@ -25,7 +26,8 @@ route('GET', '/v1/health', { auth: 'public' }, async ({ ctx }) => ({ ok: true, t
 route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx }) =>
   (await ctx.db.all('SELECT id,name,host,discount_allowed,max_discount_bps,return_days FROM sites WHERE active=1 ORDER BY name')));
 
-route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000] }, async ({ ctx, body }) => [201, await U.register(ctx, body)]);
+// (idem:false: the response holds a login key, which must never be cached)
+route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => [201, await U.register(ctx, body)]);
 
 route('POST', '/v1/webhooks/razorpay', { auth: 'public', raw: true, idem: false }, async ({ ctx, req, rawBody }) => handleRazorpayWebhook(ctx, req, rawBody));
 
@@ -55,6 +57,8 @@ route('PUT', '/v1/me/kyc', me, async ({ ctx, actor, body }) => U.submitKyc(ctx, 
 route('GET', '/v1/me/team', me, async ({ ctx, actor }) => ({ members: await U.teamOf(ctx, actor.user.id) }));
 route('GET', '/v1/me/links', me, async ({ ctx, actor }) => ({ links: await L.listLinks(ctx, actor.user.id) }));
 route('POST', '/v1/me/links', me, async ({ ctx, actor, body }) => [201, await L.createLink(ctx, actor.user, body || {})]);
+route('GET', '/v1/me/prospects', me, async ({ ctx, actor }) => ({ prospects: await PR.listProspects(ctx, actor.user.id) }));
+route('POST', '/v1/me/prospects', me, async ({ ctx, actor, body }) => [201, await PR.registerProspect(ctx, actor.user, body || {})]);
 route('GET', '/v1/me/codes', me, async ({ ctx, actor }) => ({ codes: await L.listCodes(ctx, actor.user.id) }));
 route('POST', '/v1/me/codes', me, async ({ ctx, actor, body }) => [201, await L.createCode(ctx, actor.user, body || {})]);
 route('DELETE', '/v1/me/codes/:code', me, async ({ ctx, actor, params }) => L.deactivateCode(ctx, params.code, actor.user.id));
@@ -131,7 +135,7 @@ route('GET', '/v1/admin/users', adm('admin.read'), async ({ ctx, url }) => {
   return { users: rows.map((u) => ({ ...U.publicUser(u), kyc_status: u.kyc_status })) };
 });
 
-route('POST', '/v1/admin/users', adm('users.create'), async ({ ctx, actor, body }) => {
+route('POST', '/v1/admin/users', { ...adm('users.create'), idem: false }, async ({ ctx, actor, body }) => {
   const status = actor.type === 'owner' ? 'active' : 'pending'; // an AI key can propose staff; the owner approves
   const user = await U.createUser(ctx, { ...(body || {}), status });
   const out = { user: U.publicUser(user) };
@@ -201,8 +205,9 @@ route('POST', '/v1/admin/sites/:id/rotate-secret', adm('keys.manage'), async ({ 
 route('GET', '/v1/admin/keys', adm('keys.manage'), async ({ ctx }) => ({
   keys: (await ctx.db.all('SELECT id,kind,user_id,site_id,label,scopes,rate_per_min,created_at,revoked_at,last_used_at FROM api_keys ORDER BY created_at DESC LIMIT 200')).map((k) => ({ ...k, scopes: JSON.parse(k.scopes) })),
 }));
-route('POST', '/v1/admin/keys', adm('keys.manage'), async ({ ctx, actor, body }) => {
-  const k = await createKey(ctx, { ...(body || {}), created_by: actor.keyId });
+route('POST', '/v1/admin/keys', { ...adm('keys.manage'), idem: false }, async ({ ctx, actor, body }) => {
+  const b = body || {};
+  const k = await createKey(ctx, { kind: b.kind, user_id: b.user_id, site_id: b.site_id, label: b.label ? String(b.label).slice(0, 80) : null, scopes: b.scopes, rate_per_min: b.rate_per_min ?? 120, created_by: actor.keyId });
   await atomic(ctx, () => auditStmts(ctx, [{ action: 'key.create', target: `key:${k.id}`, meta: { kind: k.kind, scopes: k.scopes } }]));
   return [201, { id: k.id, kind: k.kind, scopes: k.scopes, token: k.token, note: 'Shown once. Store it in a secret manager.' }];
 });
@@ -227,6 +232,11 @@ route('GET', '/v1/admin/payouts', adm('admin.read'), async ({ ctx, url }) => {
 route('POST', '/v1/admin/payouts/:id/approve', adm('payouts.approve'), async ({ ctx, params }) => P.approvePayout(ctx, params.id));
 route('POST', '/v1/admin/payouts/:id/reject', adm('payouts.approve'), async ({ ctx, params, body }) => P.rejectPayout(ctx, params.id, body?.note));
 route('POST', '/v1/admin/payouts/:id/execute', adm('payouts.approve'), async ({ ctx, params }) => P.executePayout(ctx, params.id));
+route('POST', '/v1/admin/payouts/:id/mark-paid', adm('payouts.approve'), async ({ ctx, params, body }) => {
+  const p = await ctx.db.first('SELECT * FROM payouts WHERE id=?', [params.id]);
+  if (p && p.provider !== 'manual') throw new HttpError(409, 'not_manual', 'only manually-paid payouts are recorded by hand; provider payouts settle through the provider webhook');
+  return P.markPaid(ctx, params.id, needStr(body?.reference, 'reference', 80));
+});
 route('POST', '/v1/admin/payouts/:id/mock-settle', adm('payouts.approve'), async ({ ctx, params }) => {
   if (ctx.payouts.mode !== 'mock') throw new HttpError(403, 'not_mock', 'mock settlement exists only in mock payout mode');
   return P.markPaid(ctx, params.id, `UTR_MOCK_${params.id.slice(-8)}`);
@@ -259,6 +269,7 @@ async function idempotent(ctx, scopeKey, rawBody, run) {
     return { status: prev.status, data: JSON.parse(prev.body), replay: true };
   }
   const out = await run();
+  if (Math.random() < 0.02) await ctx.db.run('DELETE FROM idempotency WHERE created_at < ?', [ctx.now() - 7 * 86400000]); // opportunistic cleanup
   if (out.status < 500) {
     await ctx.db.run('INSERT OR IGNORE INTO idempotency (scope,req_hash,status,body,created_at) VALUES (?,?,?,?,?)', [scopeKey, reqHash, out.status, JSON.stringify(out.data), ctx.now()]);
   }

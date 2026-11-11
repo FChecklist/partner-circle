@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Partner Circle: standalone growth-partner portal and integration API (Cloudflare Pages Functions + D1)",
-  "engines": { "node": ">=24" },
+  "engines": { "node": ">=22.13" },
   "scripts": {
     "dev": "node scripts/dev-server.mjs",
+    "seed": "node scripts/seed.mjs --demo",
     "test": "node --test \"test/*.test.js\"",
     "build": "node scripts/build-check.mjs"
   }

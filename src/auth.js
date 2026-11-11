@@ -16,6 +16,10 @@ export async function createKey(ctx, { kind, user_id = null, site_id = null, lab
     const bad = scopes.filter((s) => !AI_SCOPES.includes(s));
     if (bad.length) throw new HttpError(422, 'scope_not_assignable', `AI keys cannot hold: ${bad.join(', ')}`);
   }
+  if (!Array.isArray(scopes) || scopes.some((x) => typeof x !== 'string')) throw new HttpError(422, 'invalid_field', 'scopes must be an array of strings');
+  if (kind === 'user' && scopes.some((x) => !USER_SCOPES.includes(x))) throw new HttpError(422, 'scope_not_assignable', 'user keys hold only: me');
+  if (kind === 'site' && scopes.some((x) => !SITE_SCOPES.includes(x))) throw new HttpError(422, 'scope_not_assignable', 'site keys hold only: integration');
+  if (!Number.isInteger(rate_per_min) || rate_per_min < 1 || rate_per_min > 6000) throw new HttpError(422, 'invalid_field', 'rate_per_min must be 1..6000');
   if (kind === 'owner' && !(scopes.length === 1 && scopes[0] === '*')) throw new HttpError(422, 'invalid_field', 'owner keys hold "*"');
   if (kind === 'user' && !user_id) throw new HttpError(422, 'invalid_field', 'user_id');
   if (kind === 'site' && !site_id) throw new HttpError(422, 'invalid_field', 'site_id');

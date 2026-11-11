@@ -159,8 +159,8 @@
   };
 
   VIEWS.links = function () {
-    return Promise.all([api('GET', '/v1/me/links'), api('GET', '/v1/me/codes'), api('GET', '/v1/public/sites'), api('GET', '/v1/me')]).then(function (r) {
-      var links = r[0].links, codes = r[1].codes, sites = r[2], me = r[3];
+    return Promise.all([api('GET', '/v1/me/links'), api('GET', '/v1/me/codes'), api('GET', '/v1/public/sites'), api('GET', '/v1/me'), api('GET', '/v1/me/prospects')]).then(function (r) {
+      var links = r[0].links, codes = r[1].codes, sites = r[2], me = r[3], prospects = r[4].prospects;
       var site = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name); }));
       var path = E('input', { value: '/', placeholder: '/' });
       var origin = location.origin;
@@ -176,6 +176,11 @@
           E('h2', null, 'My codes'),
           table(['Code', 'Off', 'Used', 'Expires', ''], codes.map(function (c) { return [E('span', { class: 'code' }, c.code), (c.discount_bps / 100) + '%', c.used_count + ' / ' + c.max_uses, day(c.expires_at),
             c.active ? E('button', { class: 'btn ghost', on: { click: act(function () { return api('DELETE', '/v1/me/codes/' + c.code); }, 'Code switched off') } }, 'Switch off') : pill('off', 'o')]; })));
+        var ps = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name); })), pe = E('input', { type: 'email', placeholder: 'their e-mail' });
+        nodes.push(E('h2', null, 'Register a prospect'), card(E('p', { class: 'mut' }, 'Tell us who you are working with. You are protected for 14 days against other partners links. Their e-mail is stored only as a one-way code.'),
+          field('Product', ps), field('Prospect e-mail', pe),
+          E('button', { class: 'btn alt', on: { click: act(function () { return api('POST', '/v1/me/prospects', { site_id: ps.value, customer_email: pe.value }); }, 'Prospect registered') } }, 'Register')),
+          table(['Product', 'Registered'], prospects.map(function (x) { return [x.site_id, day(x.registered_at)]; })));
       }
       return E('div', null, nodes);
     });

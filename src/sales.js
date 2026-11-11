@@ -45,12 +45,17 @@ async function attribute(ctx, site, body, customerHash, paidAt, policy) {
       if (r.changes === 1) return { user_id: c.user_id, attribution: 'code', code: c.code, consumedCode: c.id };
     }
   }
-  // 2. click id from the embed snippet
+  // 2. a prospect a partner registered, protected for deal_protection_days (beats a later click by someone else)
+  if (customerHash) {
+    const pr = await ctx.db.first("SELECT * FROM leads WHERE site_id=? AND customer_hash=? AND source='registered'", [site.id, customerHash]);
+    if (pr && paidAt >= pr.ts && paidAt - pr.ts <= policy.deal_protection_days * DAY) return { user_id: pr.user_id, attribution: 'prospect' };
+  }
+  // 3. click id from the embed snippet
   if (body.click_id) {
     const k = await ctx.db.first('SELECT * FROM clicks WHERE id=? AND site_id=?', [String(body.click_id), site.id]);
     if (k && paidAt >= k.ts && paidAt - k.ts <= windowMs) return { user_id: k.user_id, attribution: 'click', click_id: k.id };
   }
-  // 3. earlier sign-up by the same customer
+  // 4. earlier sign-up by the same customer
   if (customerHash) {
     const l = await ctx.db.first('SELECT * FROM leads WHERE site_id=? AND customer_hash=?', [site.id, customerHash]);
     if (l && paidAt >= l.ts && paidAt - l.ts <= windowMs) return { user_id: l.user_id, attribution: 'lead', click_id: l.click_id };

@@ -72,23 +72,35 @@ export async function auditStmts(ctx, entries) {
 
 const SEQ_CONFLICT = /UNIQUE constraint failed: (ledger|audit_log)\.(seq|id)|PRIMARY KEY/i;
 
+// Writers in one isolate queue up here, so contention only remains between separate isolates / servers.
+let gateTail = Promise.resolve();
+
 /**
  * Run `build()` (which returns statements, reading chain tails itself) as one atomic batch.
- * If a concurrent writer took the same seq, rebuild from the new tail and retry.
+ * If a concurrent writer (another isolate) took the same seq, rebuild from the new tail and retry with jittered backoff.
  */
 export async function atomic(ctx, build) {
-  let lastErr;
-  for (let i = 0; i < 8; i++) {
-    const stmts = await build();
-    try {
-      await ctx.db.batch(stmts);
-      return;
-    } catch (e) {
-      lastErr = e;
-      if (!SEQ_CONFLICT.test(String(e?.message || e))) throw e;
+  const prev = gateTail;
+  let release;
+  gateTail = prev.then(() => new Promise((r) => { release = r; }));
+  await prev;
+  try {
+    let lastErr;
+    for (let i = 0; i < 25; i++) {
+      const stmts = await build();
+      try {
+        await ctx.db.batch(stmts);
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (!SEQ_CONFLICT.test(String(e?.message || e))) throw e;
+        await new Promise((r) => setTimeout(r, Math.random() * 15 * (i + 1)));
+      }
     }
+    throw lastErr;
+  } finally {
+    release();
   }
-  throw lastErr;
 }
 
 export async function audit(ctx, action, target, meta) {

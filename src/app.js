@@ -39,6 +39,11 @@ route('POST', '/v1/integration/sales', { auth: 'signed' }, async ({ ctx, actor, 
 });
 route('POST', '/v1/integration/refunds', { auth: 'signed' }, async ({ ctx, actor, body }) => S.recordRefund(ctx, actor.site, body || {}));
 
+// ---------------------------------------------------------------- who am I (any valid key)
+route('GET', '/v1/whoami', { auth: 'any' }, async ({ actor }) => ({
+  kind: actor.type, scopes: actor.scopes, user: actor.user ? U.publicUser(actor.user) : null, site_id: actor.site?.id ?? null,
+}));
+
 // ---------------------------------------------------------------- me
 const me = { auth: 'user' };
 route('GET', '/v1/me', me, async ({ ctx, actor }) => ({ ...U.publicUser(actor.user), kyc: await U.kycView(ctx, actor.user.id), sponsor: actor.user.parent_id ? (await ctx.db.first('SELECT name,handle,role FROM users WHERE id=?', [actor.user.parent_id])) : null }));
@@ -293,7 +298,10 @@ export async function handle(ctx, req) {
     let actor = null;
     if (o.ipLimit) await rateLimit(ctx, `ip:${clientIp(req) || 'unknown'}:${match.re.source}`, o.ipLimit[0], o.ipLimit[1]);
 
-    if (o.auth === 'user') {
+    if (o.auth === 'any') {
+      actor = await authenticate(ctx, req);
+      if (!actor) throw new HttpError(401, 'auth_required', 'API key required');
+    } else if (o.auth === 'user') {
       actor = await authenticate(ctx, req);
       requireKind(actor, 'user');
     } else if (o.auth === 'admin') {

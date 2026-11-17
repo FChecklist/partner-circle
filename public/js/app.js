@@ -46,8 +46,9 @@
   }
 
   // ---- API -------------------------------------------------------------------------------------------------
-  function api(method, path, body) {
+  function api(method, path, body, extra) {
     var h = { 'content-type': 'application/json' };
+    if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
     if (state.key) h.authorization = 'Bearer ' + state.key;
     return fetch(path, { method: method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }).then(function (r) {
       return r.text().then(function (t) {
@@ -66,7 +67,7 @@
 
   // ---- shell -----------------------------------------------------------------------------------------------
   var USER_TABS = { dash: 'Dashboard', team: 'Team', links: 'Links and codes', earn: 'Earnings', profile: 'My details', logs: 'Logs' };
-  var ADMIN_TABS = { queue: 'Approvals', payouts: 'Payouts', users: 'People', policy: 'Policy and sites', schemes: 'Schemes', keys: 'API keys', audit: 'Action log', ai: 'AI actions' };
+  var ADMIN_TABS = { queue: 'Approvals', payouts: 'Payouts', users: 'People', policy: 'Policy and sites', schemes: 'Schemes', suite: 'Suite', keys: 'API keys', audit: 'Action log', ai: 'AI actions' };
   var ROLE_NAME = { refer: 'Refer and Earn', partner: 'Growth Partner', exec: 'Sales Executive', leader: 'Sales Team Leader', manager: 'Sales Manager', owner: 'Owner', ai: 'AI master' };
 
   function tabs(map, cur) {
@@ -139,8 +140,8 @@
 
   // ---- member views ----------------------------------------------------------------------------------------
   VIEWS.dash = function () {
-    return Promise.all([api('GET', '/v1/me/summary'), api('GET', '/v1/me/schemes'), api('GET', '/v1/me')]).then(function (r) {
-      var s = r[0], sch = r[1].schemes, me = r[2], b = s.balance, l = s.last_30_days;
+    return Promise.all([api('GET', '/v1/me/summary'), api('GET', '/v1/me/schemes'), api('GET', '/v1/me'), api('GET', '/v1/me/dashboard').catch(function () { return null; })]).then(function (r) {
+      var s = r[0], sch = r[1].schemes, me = r[2], b = s.balance, l = s.last_30_days, suite = r[3];
       var tile = function (big, label) { return card(E('div', { class: 'big' }, big), E('span', { class: 'mut' }, label)); };
       var nodes = [E('h1', null, 'Hello ' + (me.name || '')), E('p', { class: 'mut' }, ROLE_NAME[me.role] + (me.sponsor ? ' · sponsor: ' + me.sponsor.name : ''))];
       if (me.status !== 'active') nodes.push(E('div', { class: 'note' }, 'Your account is waiting for approval. You can finish your details now.'));
@@ -149,6 +150,7 @@
       if (s.team_size) nodes.push(card(E('b', null, 'Your team'), E('p', null, s.team_size + ' people · team sales ' + money(l.team_net_minor) + ' in 30 days')));
       nodes.push(E('h2', null, 'Money'), E('div', { class: 'grid' }, tile(money(b.available_minor), 'ready to be paid'), tile(money(b.pending_minor), 'on hold (refund window)')));
       if (b.awaiting_razorpay_minor) nodes.push(E('div', { class: 'note' }, money(b.awaiting_razorpay_minor) + ' is waiting for the payment to be confirmed by Razorpay.'));
+      if (suite) nodes.push(suiteWidgets(suite, me));
       if (sch.length) {
         nodes.push(E('h2', null, 'Schemes'));
         sch.forEach(function (x) { nodes.push(card(E('div', { class: 'row' }, E('b', null, x.name), E('span', null, x.percent + '%')), bar(x.percent), E('span', { class: 'mut' }, 'Bonus ' + money(x.bonus_minor) + ' · ends ' + day(x.ends_at)))); });
@@ -156,7 +158,54 @@
       return E('div', null, nodes);
     });
   };
+  // Moneypenny credits, Monopoly targets and achievements, and where commissions go. Everything is read through Partner Circle: no second login.
+  function suiteWidgets(d, me) {
+    var cur = d.brand.currency_label, mp = d.moneypenny, mo = d.monopoly, c = d.commissions;
+    var soft = function (st) { return st === 'live' ? null : E('p', { class: 'mut' }, st === 'stale' ? 'Showing the last numbers we saw; they refresh in a moment.' : st === 'setting_up' ? 'Your account is being set up here. Check again in a minute.' : st === 'not_connected' || st === 'off' ? 'Not switched on yet.' : 'Refreshing, back in a moment.'); };
+    var nodes = [E('h2', null, cur + ' (credits)')];
+    if (mp.lines) {
+      var body = [E('div', { class: 'big' }, mp.credits.toLocaleString('en-IN')), E('span', { class: 'mut' }, mp.lines.owned), E('p', { class: 'mut' }, mp.lines.rate)];
+      if (mp.lines.convert) body.push(E('p', null, mp.lines.convert));
+      if (mp.lines.settling) body.push(E('p', { class: 'mut' }, mp.lines.settling));
+      if (mp.can_convert > 0 && mp.conversion_enabled && me.status === 'active') {
+        var amt = E('input', { type: 'number', min: '1', max: String(mp.can_convert), value: String(mp.can_convert) });
+        body.push(field('How many ' + cur + ' to convert', amt), E('button', { class: 'btn alt', on: { click: act(function () {
+          return api('POST', '/v1/me/moneypenny/convert-request', { credits: Number(amt.value) }, { 'idempotency-key': 'w' + Date.now() + Math.random().toString(16).slice(2, 8) });
+        }, 'Request sent. A person approves it before any money moves.') } }, 'Ask to convert')));
+      }
+      nodes.push(card.apply(null, body.concat([soft(mp.status)])));
+    } else nodes.push(card(soft(mp.status) || E('p', { class: 'mut' }, 'Nothing to show yet.')));
+    nodes.push(E('h2', null, 'Targets and achievements'));
+    var t = mo.targets || [];
+    if (t.length) t.forEach(function (x) { var pc = x.goal ? Math.round((x.progress / x.goal) * 100) : 0; nodes.push(card(E('div', { class: 'row' }, E('b', null, x.name), E('span', null, x.progress + ' / ' + x.goal + (x.unit ? ' ' + x.unit : ''))), bar(pc), E('span', { class: 'mut' }, x.period + (x.ends_at ? ' · ends ' + day(x.ends_at) : '')))); });
+    else nodes.push(card(E('p', { class: 'mut' }, mo.status === 'live' || mo.status === 'stale' ? 'No targets set for you yet.' : 'Targets appear here once they are connected.'), soft(mo.status === 'live' ? 'live' : mo.status)));
+    var a = mo.achievements || { badges: [] };
+    if (a.level != null || (a.badges && a.badges.length)) nodes.push(card(E('b', null, 'Level ' + (a.level == null ? '-' : a.level)), E('p', null, (a.badges || []).map(function (bd) { return pill(bd.name); }))));
+    if (c.destination === 'moneypenny') nodes.push(E('div', { class: 'note' }, 'Your matured commissions are paid to you as ' + cur + '. Sent so far: ' + money(c.sent_to_moneypenny_minor) + (c.on_the_way_to_moneypenny_minor ? ' · on the way: ' + money(c.on_the_way_to_moneypenny_minor) : '') + '.'));
+    return E('div', null, nodes);
+  }
   function bar(p) { return E('div', { class: 'bar' }, E('i', { class: p >= 80 ? 'g' : p >= 40 ? 'a' : 'r', style: { width: Math.max(0, Math.min(100, Number(p) || 0)) + '%' } })); }
+
+  // ---- suite console (owner changes; the AI master can only look) -----------------------------------------------
+  VIEWS.suite = function () {
+    var owner = state.who.kind === 'owner';
+    return Promise.all([api('GET', '/v1/admin/suite/status'), api('GET', '/v1/admin/tenant')]).then(function (r) {
+      var st = r[0], t = r[1];
+      var nm = E('input', { value: t.product_name }), ac = E('input', { value: t.accent }), cl = E('input', { value: t.currency_label });
+      var dest = E('select', null, E('option', { value: 'ledger' }, 'Pay through the owner-approved payout flow (current policy)'), E('option', { value: 'moneypenny' }, 'Pay as Moneypenny credits'));
+      dest.value = t.commission_dest;
+      var sw = function (key, label) { var s = E('select', null, E('option', { value: '1' }, 'On'), E('option', { value: '0' }, 'Off')); s.value = String(t[key]); return [field(label, s), s]; };
+      var m = sw('mnp_enabled', 'Moneypenny'), o = sw('mono_enabled', 'Monopoly');
+      var nodes = [E('h1', null, 'Suite'), E('p', { class: 'mut' }, 'Payout mode: ' + st.payout_mode + ' · Moneypenny ' + (st.engines.moneypenny.configured ? 'connected' : 'not connected') + ' · Monopoly ' + (st.engines.monopoly.configured ? 'connected' : 'not connected'))];
+      if (owner) nodes.push(card(E('b', null, 'Brand and wording'), field('Product name', nm), field('Accent colour (#rrggbb)', ac), field('Currency name', cl), field('Where matured commissions are paid', dest), m[0], o[0],
+        E('button', { class: 'btn', on: { click: act(function () { return api('PUT', '/v1/admin/tenant', { product_name: nm.value, accent: ac.value, currency_label: cl.value, commission_dest: dest.value, mnp_enabled: Number(m[1].value), mono_enabled: Number(o[1].value) }); }, 'Saved') } }, 'Save'),
+        E('button', { class: 'btn alt', on: { click: act(function () { return api('POST', '/v1/admin/suite/sweep'); }, 'Sweep done') } }, 'Send matured commissions now')));
+      nodes.push(E('h2', null, 'Commissions sent to Moneypenny'), table(['State', 'Entries', 'Amount'], st.postings.map(function (p) { return [p.state, String(p.n), money(p.amount_minor)]; })));
+      nodes.push(E('h2', null, 'Needs the owner'), table(['Entry', 'State', 'Why', 'Amount', ''], st.exceptions.map(function (x) { return [String(x.ledger_seq), x.state, x.last_error || '-', money(x.amount_minor),
+        owner ? E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/admin/suite/postings/' + x.ledger_seq + '/requeue'); }, 'Back in the queue') } }, 'Try again') : '']; })));
+      return E('div', null, nodes);
+    });
+  };
 
   VIEWS.team = function () {
     return api('GET', '/v1/me/team').then(function (r) {

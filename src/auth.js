@@ -5,7 +5,7 @@ import { HttpError, randHex, sha256Hex, hmacHex, timingSafeEqualStr } from './ut
 import { atomic, auditStmts } from './chain.js';
 
 /** Scopes only a human owner can hold. An AI key can never be minted with these (CONSTITUTION: AI proposes, owner approves). */
-export const OWNER_ONLY_SCOPES = ['payouts.approve', 'kyc.verify', 'users.approve', 'keys.manage', 'policy.write', 'schemes.settle', 'schemes.activate', 'users.erase', 'disputes.resolve'];
+export const OWNER_ONLY_SCOPES = ['payouts.approve', 'kyc.verify', 'users.approve', 'keys.manage', 'policy.write', 'schemes.settle', 'schemes.activate', 'users.erase', 'disputes.resolve', 'suite.write'];
 export const AI_SCOPES = ['admin.read', 'users.create', 'users.suspend', 'codes.write', 'schemes.write', 'sites.read', 'maintenance.run'];
 export const USER_SCOPES = ['me'];
 export const SITE_SCOPES = ['integration'];

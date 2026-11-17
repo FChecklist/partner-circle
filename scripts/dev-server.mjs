@@ -9,6 +9,7 @@ import { makeCtx } from '../src/ctx.js';
 import { handle } from '../src/app.js';
 import { createKey } from '../src/auth.js';
 import { nullMailer, mockPayoutAdapter } from '../src/adapters.js';
+import { enginesFromEnv, stubEngines } from '../src/engines.js';
 
 const DATA = join(ROOT, '.data');
 mkdirSync(DATA, { recursive: true });
@@ -21,7 +22,9 @@ const env = JSON.parse(readFileSync(secretsPath, 'utf8'));
 const { db } = openDb(join(DATA, 'dev.sqlite'));
 if (!(await db.first('SELECT 1 AS x FROM sites LIMIT 1'))) await seedSites(db);
 const mailer = nullMailer();
-const ctx = makeCtx({ db, env, mailer, payouts: mockPayoutAdapter() });
+// `--stub` wires fake Moneypenny/Monopoly engines (real client code, fake servers) so the dashboard can be seen locally. Without it: "not connected".
+const engines = process.argv.includes('--stub') ? stubEngines().mnp && (() => { const s = stubEngines(); s.fakes.mnp.state.balances['demo@example.test'] = 125000; return s; })() : enginesFromEnv(process.env, fetch);
+const ctx = makeCtx({ db, env, mailer, payouts: mockPayoutAdapter(), engines: engines ? { mnp: engines.mnp, mono: engines.mono } : {} });
 
 // First run: mint an owner key and an AI key into a git-ignored file. The keys are NOT printed.
 const keysPath = join(DATA, 'dev-keys.json');

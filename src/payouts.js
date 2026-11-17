@@ -21,7 +21,8 @@ const AVAILABLE_SQL = `
   FROM ledger l LEFT JOIN sales s ON s.id = l.sale_id
  WHERE l.account_id = ? AND l.eligible_at <= ?
    AND ((l.kind IN ('commission','override') AND s.status = 'recorded' AND s.rzp_status = 'confirmed' AND COALESCE(s.dispute_status,'') <> 'open') OR l.kind = 'adjustment')
-   AND NOT EXISTS (SELECT 1 FROM payout_items pi WHERE pi.ledger_seq = l.seq)`;
+   AND NOT EXISTS (SELECT 1 FROM payout_items pi WHERE pi.ledger_seq = l.seq)
+   AND NOT EXISTS (SELECT 1 FROM mp_postings mp WHERE mp.ledger_seq = l.seq)`; // an entry handed to Moneypenny can never also be paid out here
 
 export async function availableEntries(ctx, userId) {
   return ctx.db.all(`SELECT l.seq, l.amount_minor ${AVAILABLE_SQL} ORDER BY l.seq`, [userId, ctx.now()]);
@@ -33,6 +34,7 @@ export async function balances(ctx, userId) {
   const available = await sum(`SELECT SUM(l.amount_minor) AS n ${AVAILABLE_SQL}`, [userId, now]);
   const live = `FROM ledger l LEFT JOIN sales s ON s.id = l.sale_id
      WHERE l.account_id = ? AND NOT EXISTS (SELECT 1 FROM payout_items pi WHERE pi.ledger_seq = l.seq)
+       AND NOT EXISTS (SELECT 1 FROM mp_postings mp WHERE mp.ledger_seq = l.seq)
        AND ((l.kind IN ('commission','override') AND s.status = 'recorded') OR l.kind = 'adjustment')`;
   const pendingAll = await sum(`SELECT SUM(l.amount_minor) AS n ${live}`, [userId]);
   const awaitingRzp = await sum(`SELECT SUM(l.amount_minor) AS n ${live} AND l.kind <> 'adjustment' AND l.eligible_at <= ? AND s.rzp_status <> 'confirmed'`, [userId, now]);
@@ -93,6 +95,7 @@ export async function requestPayout(ctx, user) {
     ]);
   } catch (e) {
     if (/one_open_payout|UNIQUE constraint failed: (payouts\.user_id|payout_items)/.test(String(e.message))) throw new HttpError(409, 'payout_open', 'a payout is already in progress');
+    if (/already posted to Moneypenny/.test(String(e.message))) throw new HttpError(409, 'balance_changed', 'part of your balance just moved to Moneypenny; check your balance and ask again');
     throw e;
   }
   return payoutView(await ctx.db.first('SELECT * FROM payouts WHERE id=?', [id]));

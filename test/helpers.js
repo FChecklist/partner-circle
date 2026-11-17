@@ -24,7 +24,7 @@ export async function mk(opts = {}) {
   await db.run('UPDATE sites SET active=1, host_confirmed=1');
   const mailer = nullMailer();
   const payouts = opts.payouts || mockPayoutAdapter();
-  const ctx = makeCtx({ db, env: { ...ENV, ...(opts.env || {}) }, now: () => clock.t, mailer, payouts });
+  const ctx = makeCtx({ db, env: { ...ENV, ...(opts.env || {}) }, now: () => clock.t, mailer, payouts, engines: opts.engines });
   const owner = await createKey(ctx, { kind: 'owner', label: 'test owner' });
   const ai = await createKey(ctx, { kind: 'ai', label: 'test ai' });
   const h = {

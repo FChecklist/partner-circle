@@ -9,6 +9,7 @@
     "dev": "node scripts/dev-server.mjs",
     "seed": "node scripts/seed.mjs --demo",
     "test": "node --test \"test/*.test.js\"",
-    "build": "node scripts/build-check.mjs"
+    "build": "node scripts/build-check.mjs",
+    "openapi": "node scripts/gen-openapi.mjs"
   }
 }

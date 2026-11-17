@@ -197,19 +197,30 @@ export async function applyRefund(ctx, sale, meta = {}) {
       `SELECT pi.ledger_seq FROM payout_items pi JOIN payouts p ON p.id = pi.payout_id
         WHERE p.status IN ('processing','paid') AND pi.ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)`, [sale.id])).map((r) => r.ledger_seq));
   const cancel = await cancelWaitingPayouts(ctx, sale.id, 'a sale in this payout was refunded');
-  const voids = entries
-    .filter((e) => !sent.has(e.seq))
-    .map((e) => ({ account_id: e.account_id, kind: 'void', amount_minor: -e.amount_minor, sale_id: sale.id, eligible_at: e.eligible_at, ref: `void:${e.id}`, memo: meta.reason || 'refund' }));
-  const flag = sent.size > 0 ? 1 : 0;
+  // Entries handed to Moneypenny: if Moneypenny was never contacted (still pending, 0 attempts) take the claim back and void normally;
+  // otherwise the credit may exist there, so treat it like a payout already sent: no clawback, flag it for the owner.
+  // Claims are read INSIDE the batch builder: a concurrent claim/delivery moves the ledger or action-log tail, so this batch rebuilds and re-reads.
   const usage = typeof meta.usage_verified === 'boolean' ? (meta.usage_verified ? 1 : 0) : null;
-  await atomic(ctx, async () => [
-    { sql: "UPDATE sales SET status='refunded', refunded_at=?, refund_after_payout=?, usage_verified=?, refund_reason=?, dispute_status=COALESCE(?, dispute_status) WHERE id=? AND status<>'refunded'",
-      params: [ctx.now(), flag, usage, meta.reason || null, meta.disputeStatus || null, sale.id] },
-    ...cancel.sql,
-    ...(await ledgerStmts(ctx, [...voids, ...cancel.ledger])),
-    ...(await auditStmts(ctx, [{ action: flag ? 'sale.refunded_after_payout' : 'sale.refunded', target: `sale:${sale.id}`,
-      meta: { voided: voids.length, kept_paid: sent.size, cancelled_payouts: cancel.payouts.map((p) => p.id), reason: meta.reason || null, usage_verified: meta.usage_verified ?? null } }])),
-  ]);
+  await atomic(ctx, async () => {
+    const claims = await ctx.db.all('SELECT ledger_seq, state, attempts, amount_minor, user_id FROM mp_postings WHERE ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)', [sale.id]);
+    const untouched = claims.filter((c) => c.state === 'pending' && c.attempts === 0);
+    const sentNow = new Set(sent);
+    for (const c of claims) if (!(c.state === 'pending' && c.attempts === 0)) sentNow.add(c.ledger_seq);
+    const mpRelease = untouched.map((c) => ({ account_id: c.user_id, kind: 'payout_release', amount_minor: c.amount_minor, eligible_at: ctx.now(), ref: `mprelease:${c.ledger_seq}`, memo: 'refund before Moneypenny was told' }));
+    const voids = entries
+      .filter((e) => !sentNow.has(e.seq))
+      .map((e) => ({ account_id: e.account_id, kind: 'void', amount_minor: -e.amount_minor, sale_id: sale.id, eligible_at: e.eligible_at, ref: `void:${e.id}`, memo: meta.reason || 'refund' }));
+    const flag = sentNow.size > 0 ? 1 : 0;
+    return [
+      { sql: "UPDATE sales SET status='refunded', refunded_at=?, refund_after_payout=?, usage_verified=?, refund_reason=?, dispute_status=COALESCE(?, dispute_status) WHERE id=? AND status<>'refunded'",
+        params: [ctx.now(), flag, usage, meta.reason || null, meta.disputeStatus || null, sale.id] },
+      ...cancel.sql,
+      ...untouched.map((c) => ({ sql: "DELETE FROM mp_postings WHERE ledger_seq=? AND state='pending' AND attempts=0", params: [c.ledger_seq] })),
+      ...(await ledgerStmts(ctx, [...mpRelease, ...voids, ...cancel.ledger])),
+      ...(await auditStmts(ctx, [{ action: flag ? 'sale.refunded_after_payout' : 'sale.refunded', target: `sale:${sale.id}`,
+        meta: { voided: voids.length, kept_paid: sentNow.size, cancelled_payouts: cancel.payouts.map((p) => p.id), reason: meta.reason || null, usage_verified: meta.usage_verified ?? null } }])),
+    ];
+  });
   await tellCancelled(ctx, cancel.payouts);
   return saleView(await ctx.db.first('SELECT * FROM sales WHERE id=?', [sale.id]));
 }

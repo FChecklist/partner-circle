@@ -21,7 +21,7 @@ Branch `feat/partner-circle-v1`, local only (no remote; a public repo needs Raja
 2. Engine text handling (untrusted fields) and the AI header and `_untrusted` addition in `src/app.js`.
 3. `suite.write` owner-only scope; `PUT /v1/admin/tenant` validation (logo https only, accent, names).
 4. Ledger self-check and both hash chains with the new `payout_reserve` entries that have no payout id.
-5. Known gaps: no cron on free Pages (postings and provisioning retry only on dashboard load or owner sweep); Moneypenny balance read uses a spend-class key (read key would be tighter); no per-tenant data separation beyond one-deployment-per-company; no browser test of the new widgets.
+5. Known gaps: no cron on free Pages (postings and provisioning retry only on dashboard load or owner sweep); Moneypenny balance read uses a spend-class key (read key would be tighter); no per-tenant data separation beyond one-deployment-per-company; the new dashboard widgets and Suite console have NOT been opened in a browser (a syntax slip in app.js was found and fixed by the build check; look at them with `npm run dev -- --stub`).
 
 ## Before go-live (all need the owner)
 Two clean audits; Moneypenny live check with test tenant keys (`MNP_*` secrets, masked); Monopoly routes and keys; migration 0004 on D1; Rajat's yes for any repo.

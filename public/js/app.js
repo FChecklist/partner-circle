@@ -171,7 +171,7 @@
         var amt = E('input', { type: 'number', min: '1', max: String(mp.can_convert), value: String(mp.can_convert) });
         body.push(field('How many ' + cur + ' to convert', amt), E('button', { class: 'btn alt', on: { click: act(function () {
           return api('POST', '/v1/me/moneypenny/convert-request', { credits: Number(amt.value) }, { 'idempotency-key': 'w' + Date.now() + Math.random().toString(16).slice(2, 8) });
-        }, 'Request sent. A person approves it before any money moves.') } }, 'Ask to convert')));
+        }, 'Request sent. A person approves it before any money moves.') } }, 'Ask to convert'));
       }
       nodes.push(card.apply(null, body.concat([soft(mp.status)])));
     } else nodes.push(card(soft(mp.status) || E('p', { class: 'mut' }, 'Nothing to show yet.')));

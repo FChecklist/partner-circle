@@ -93,7 +93,7 @@ test('migrations: apply cleanly to an empty database, in order, once; tables and
   assert.deepEqual(triggers, ['audit_no_delete', 'audit_no_update', 'ledger_no_delete', 'ledger_no_update', 'mp_posting_not_in_payout', 'payout_item_not_in_mp']);
   // re-opening an already-migrated file database does not re-run migrations
   const again = openDb();
-  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 3);
+  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 4);
 });
 
 test('schema constraints: one open payout per user, unique order per site, sales amounts and roles checked by the database itself', async () => {

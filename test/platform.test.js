@@ -82,15 +82,15 @@ test('Pages Function fails closed when secrets are missing (never runs with an e
 
 test('migrations: apply cleanly to an empty database, in order, once; tables and append-only triggers exist', () => {
   const files = migrationFiles();
-  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql', '0003_hardening.sql']);
+  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql', '0003_hardening.sql', '0004_suite.sql']);
   const raw = new DatabaseSync(':memory:');
   for (const f of files) raw.exec(f.sql);
   const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
-  for (const t of ['sites', 'users', 'user_kyc', 'api_keys', 'links', 'codes', 'clicks', 'leads', 'sales', 'razorpay_events', 'payouts', 'payout_items', 'ledger', 'audit_log', 'policy', 'idempotency', 'rate_limits', 'email_codes', 'schemes', 'chain_checkpoints']) {
+  for (const t of ['sites', 'users', 'user_kyc', 'api_keys', 'links', 'codes', 'clicks', 'leads', 'sales', 'razorpay_events', 'payouts', 'payout_items', 'ledger', 'audit_log', 'policy', 'idempotency', 'rate_limits', 'email_codes', 'schemes', 'chain_checkpoints', 'tenant_profile', 'engine_links', 'engine_cache', 'mp_postings']) {
     assert.ok(tables.includes(t), `table ${t}`);
   }
   const triggers = raw.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all().map((r) => r.name).sort();
-  assert.deepEqual(triggers, ['audit_no_delete', 'audit_no_update', 'ledger_no_delete', 'ledger_no_update']);
+  assert.deepEqual(triggers, ['audit_no_delete', 'audit_no_update', 'ledger_no_delete', 'ledger_no_update', 'mp_posting_not_in_payout', 'payout_item_not_in_mp']);
   // re-opening an already-migrated file database does not re-run migrations
   const again = openDb();
   assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 3);

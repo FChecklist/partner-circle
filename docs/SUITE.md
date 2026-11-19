@@ -36,6 +36,8 @@ Moneypenny (real contract `contract/v1/openapi.json`; signing `x-mnp-*`): used `
 Monopoly (real contract `CONTRACT/signed-v1.md`; signing `X-Key-Id`, `X-Timestamp`, `X-Signature`): **per-person routes are not in v1 yet.** Partner Circle proposes (scopes `ingest` and `widgets`): `POST /api/v1/people {work_email,name,role,team_ref,source}`, `POST /api/v1/people/suspend {work_email}`, `GET /api/v1/people/targets?email=`, `GET /api/v1/people/achievements?email=`. Until they exist the dashboard shows "setting up".
 Also needed: Monopoly employees log in with their own session today; partners must not (all access via these signed routes).
 
+**BOSS ruling 19 Nov: commission to Moneypenny stays OFF in v1 (ledger only; both products are our own use). Sending commissions to Moneypenny is a v2 item.** Monopoly per-person routes stay contract-only until Monopoly passes two audits.
+
 ## 5. Tenants (other companies)
 **Decision taken for now: one deployment per company** (own D1 database, own secrets). No cross-company query can exist, so no leak is possible by a forgotten `WHERE`. Per company, in `tenant_profile`: slug, product name, accent colour, logo (https only), currency wording (name is a setting; "Moneypenny" default), credits per US$, engine off-switches, commission destination. Rate cards are the `sites` table (commission_bps, refer_bps, hold days): per company by construction. Partners and keys: per deployment.
 Not done, for the owner to decide (architecture decision 4): a shared database with a `tenant_id` on every table (about 2,500 lines touched, chains per tenant). Cost of the chosen path: one free D1 database per company (the free-plan limit is UNKNOWN: check before promising), and no cross-company reporting.

@@ -371,3 +371,18 @@ test('major 4: a Moneypenny suspend is recorded honestly as no_remote_suspend', 
   const a = await h.ctx.db.first("SELECT meta FROM audit_log WHERE action='engine.link' AND meta LIKE '%no_remote_suspend%' LIMIT 1");
   assert.ok(a, 'audit row carries the no_remote_suspend note');
 });
+
+test('audit 3: release is refused when it cannot prove no credit exists (sale_already_used, retried claims, refunded sale)', async () => {
+  const h = await withEngines();
+  await earner(h, 'Dup');
+  await setDest(h, 'moneypenny');
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  const row = await h.ctx.db.first('SELECT * FROM mp_postings');
+  await h.ctx.db.run("UPDATE mp_postings SET state='rejected', granted_credits=NULL, last_error='sale_already_used', attempts=1 WHERE ledger_seq=?", [row.ledger_seq]);
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'manual_review');
+  await h.ctx.db.run("UPDATE mp_postings SET last_error='no_rule', attempts=2 WHERE ledger_seq=?", [row.ledger_seq]);
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'manual_review');
+  await h.ctx.db.run("UPDATE mp_postings SET attempts=1 WHERE ledger_seq=?", [row.ledger_seq]);
+  await h.ctx.db.run("UPDATE sales SET status='refunded' WHERE id=(SELECT sale_id FROM ledger WHERE seq=?)", [row.ledger_seq]);
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'sale_not_recorded');
+});

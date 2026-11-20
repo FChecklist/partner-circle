@@ -15,6 +15,7 @@ import { EngineError } from './engines.js';
 
 const FRESH_MS = 45_000;
 const MAX_ATTEMPTS = 10;
+const NO_CREDIT_REASONS = new Set(['no_rule', 'sale_ref_required', 'payer_required', 'no_cash_no_commission']);
 const TRANSIENT_REASONS = new Set(['too_many_events', 'over_event_limit', 'daily_cap_reached']);
 
 const clean = (s, n = 60) => String(s ?? '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, n);
@@ -323,6 +324,10 @@ export async function releasePosting(ctx, seq) {
   const p = await ctx.db.first('SELECT * FROM mp_postings WHERE ledger_seq=?', [seq]);
   if (!p) throw new HttpError(404, 'not_found', 'posting not found');
   if (p.state !== 'rejected' || p.granted_credits != null) throw new HttpError(409, 'bad_state', 'only a definitely rejected posting can be released');
+  // Releasable only when Moneypenny provably holds NO credit: one single attempt (no earlier unknown outcome), a "nothing granted" reason
+  // (never sale_already_used / a 4xx on a retry), and the sale still standing (a refunded sale keeps its commission reversed).
+  if (p.attempts > 1 || !NO_CREDIT_REASONS.has(p.last_error)) throw new HttpError(409, 'manual_review', 'this refusal cannot prove that no credit exists at Moneypenny; check there first');
+  if (!(await ctx.db.first("SELECT 1 AS x FROM ledger l JOIN sales s ON s.id=l.sale_id WHERE l.seq=? AND s.status='recorded'", [seq]))) throw new HttpError(409, 'sale_not_recorded', 'the sale was refunded or changed; the entry stays reversed');
   await atomic(ctx, async () => {
     if (!(await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE ledger_seq=? AND state='rejected' AND granted_credits IS NULL", [seq]))) return [];
     return [

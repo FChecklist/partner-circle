@@ -23,7 +23,7 @@ async function earner(h, name = 'Pia') {
   h.advance(38 * DAY);
   return p;
 }
-const withEngines = async (extra = {}) => { const e = stubEngines(); const h = await mk({ engines: { mnp: e.mnp, mono: e.mono }, ...extra }); h.fakes = e.fakes; return h; };
+const withEngines = async (extra = {}) => { const e = stubEngines(); const h = await mk({ engines: { mnp: e.mnp, mono: e.mono }, env: { MNP_COMMISSION_ENABLED: '1' }, ...extra }); h.fakes = e.fakes; return h; };
 const setDest = (h, dest) => h.call('PUT', '/v1/admin/tenant', { key: h.owner, body: { commission_dest: dest } });
 
 // ------------------------------------------------------------------ borders (contract tests)
@@ -318,4 +318,56 @@ test('Moneypenny signature is the pinned six-part form (timestamp, nonce, method
   const want = createHmac('sha256', 'secret').update('1700000000000\nn1\nPOST\n/v1/x?a=1\nabc\nk-1').digest('hex');
   assert.equal(await mnpSign('secret', parts), want);
   assert.notEqual(await mnpSign('secret', { ...parts, idem: '' }), want, 'the idempotency key is part of what is signed');
+});
+
+test('major 1: ok:true with no reason or granted 0 is never "posted"; the claim stays pending and retries with the same key', async () => {
+  const h = await withEngines();
+  await earner(h, 'Vague');
+  await setDest(h, 'moneypenny');
+  const orig = h.ctx.engines.mnp.postCommission;
+  h.ctx.engines.mnp.postCommission = async () => ({ granted: 0, reason: null });
+  const a = await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  assert.deepEqual([a.data.claimed, a.data.posted, a.data.retry], [1, 0, 1]);
+  const row = await h.ctx.db.first('SELECT state, last_error, granted_credits FROM mp_postings');
+  assert.deepEqual([row.state, row.last_error, row.granted_credits], ['pending', 'unclear_answer', null]);
+  h.ctx.engines.mnp.postCommission = orig;
+});
+
+test('major 2: commission to Moneypenny is refused unless the server switch is on; a definitely rejected claim can be released back to the ledger', async () => {
+  const off = await withEngines({ env: {} });
+  assert.equal((await setDest(off, 'moneypenny')).data.error.code, 'not_in_v1');
+  const h = await withEngines();
+  const p = await earner(h, 'Refused');
+  await setDest(h, 'moneypenny');
+  h.fakes.mnp.state.rule = null; // Moneypenny answers no_rule: a definite refusal
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  const row = await h.ctx.db.first('SELECT * FROM mp_postings');
+  assert.equal(row.state, 'rejected');
+  const before = (await h.call('GET', '/v1/me/dashboard', { key: p.key })).data.commissions;
+  const rel = await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner });
+  assert.equal(rel.status, 200);
+  assert.equal(await h.ctx.db.first('SELECT 1 AS x FROM mp_postings'), null);
+  const after = (await h.call('GET', '/v1/me/dashboard', { key: p.key })).data.commissions;
+  assert.ok(after.available_minor > before.available_minor, 'money is back in the partner balance');
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).status, 404);
+});
+
+test('major 3: erase is refused until Monopoly confirms the removal', async () => {
+  const h = await withEngines();
+  const p = await earner(h, 'Gone');
+  await h.call('GET', '/v1/me/dashboard', { key: p.key });
+  await h.ctx.db.run("UPDATE engine_links SET state='linked', linked_at=1 WHERE user_id=? AND engine='mono'", [p.id]);
+  h.fakes.mono.state.down = true;
+  const r = await h.call('POST', `/v1/admin/users/${p.id}/erase`, { key: h.owner });
+  assert.equal(r.data.error.code, 'engine_suspend_pending');
+  assert.equal((await h.ctx.db.first('SELECT erased_at FROM users WHERE id=?', [p.id])).erased_at, null);
+});
+
+test('major 4: a Moneypenny suspend is recorded honestly as no_remote_suspend', async () => {
+  const h = await withEngines();
+  const p = await earner(h, 'Quiet');
+  await SU.enqueueLinks(h.ctx, p.id, 'suspended');
+  await SU.syncUser(h.ctx, p.id);
+  const a = await h.ctx.db.first("SELECT meta FROM audit_log WHERE action='engine.link' AND meta LIKE '%no_remote_suspend%' LIMIT 1");
+  assert.ok(a, 'audit row carries the no_remote_suspend note');
 });

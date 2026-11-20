@@ -181,6 +181,10 @@ route('POST', '/v1/admin/users/:id/erase', adm('users.erase'), async ({ ctx, par
     throw new HttpError(409, 'posting_open', 'a commission posting to Moneypenny is still open; settle or requeue it first');
   }
   await relink(ctx, params.id, 'suspended'); // tell the engines to stop earning BEFORE the e-mail is erased
+  const mono = await ctx.db.first("SELECT desired, state, linked_at FROM engine_links WHERE user_id=? AND engine='mono'", [params.id]);
+  if (mono && mono.linked_at && !(mono.desired === 'suspended' && mono.state === 'linked')) {
+    throw new HttpError(409, 'engine_suspend_pending', 'Monopoly has not confirmed the removal yet; try again shortly. Nothing was erased.');
+  }
   const r = await U.eraseUser(ctx, params.id);
   await ctx.db.run('DELETE FROM engine_links WHERE user_id=?', [params.id]);
   await ctx.db.run('DELETE FROM engine_cache WHERE user_id=?', [params.id]);
@@ -196,6 +200,7 @@ route('PUT', '/v1/admin/tenant', adm('suite.write'), async ({ ctx, body }) => SU
 route('GET', '/v1/admin/suite/status', adm('admin.read'), async ({ ctx }) => SU.suiteStatus(ctx));
 route('POST', '/v1/admin/suite/sweep', adm('suite.write'), async ({ ctx }) => SU.runPostings(ctx, { limit: 50 }));
 route('POST', '/v1/admin/suite/postings/:seq/requeue', adm('suite.write'), async ({ ctx, params }) => SU.requeuePosting(ctx, Number(params.seq)));
+route('POST', '/v1/admin/suite/postings/:seq/release', adm('suite.write'), async ({ ctx, params }) => SU.releasePosting(ctx, Number(params.seq)));
 route('POST', '/v1/admin/users/:id/codes', adm('codes.write'), async ({ ctx, params, body }) => [201, await L.createCode(ctx, null, body || {}, { asAdmin: true, forUserId: params.id })]);
 
 route('GET', '/v1/admin/policy', adm('admin.read'), async ({ ctx }) => getPolicy(ctx));

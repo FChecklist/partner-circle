@@ -1343,6 +1343,31 @@
         }
       }
     },
+    "/v1/admin/suite/postings/:seq/release": {
+      "post": {
+        "operationId": "post_v1_admin_suite_postings_seq_release",
+        "summary": "POST /v1/admin/suite/postings/:seq/release",
+        "x-rw": "write",
+        "x-money": true,
+        "x-auth": "admin",
+        "x-scope": "suite.write",
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused. Money and credits only move on a person's decision; an AI may prepare a proposal, never approve."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-rate-limit": "per key (default 120/min)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "default": {
+            "description": "error: { error: { code, message } }"
+          }
+        }
+      }
+    },
     "/v1/admin/users/:id/codes": {
       "post": {
         "operationId": "post_v1_admin_users_id_codes",

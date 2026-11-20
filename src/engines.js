@@ -24,7 +24,7 @@ async function send(fetchImpl, url, init, timeoutMs) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { ...init, signal: ac.signal });
+    const res = await fetchImpl(url, { ...init, signal: ac.signal, redirect: 'error' });
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
@@ -83,7 +83,7 @@ export function moneypennyClient({ baseUrl, keyId, secret, fetchImpl, now = () =
     /** Pay one matured commission as a `commission` credit. Moneypenny dedupes on event_key and on the Idempotency-Key. */
     async postCommission({ email, event_key, cash_minor, sale_ref, payer_email, gen = 0 }) {
       const d = await call('POST', '/v1/event', { email, event_type: 'partner_commission', event_key, payer_email, cash_minor, currency: 'INR', sale_ref }, { idem: gen ? `${event_key}#${gen}` : event_key });
-      return { granted: d.granted ?? 0, reason: d.reason || 'granted' };
+      return { granted: Math.max(0, Math.trunc(Number(d.granted)) || 0), reason: d.reason ? String(d.reason).slice(0, 60) : null }; // no reason is NOT a grant
     },
     /** A person asks to turn commission credits into cash. Moneypenny only records and calculates; a person approves there. Never cached. */
     async convertRequest({ email, credits, idem }) {

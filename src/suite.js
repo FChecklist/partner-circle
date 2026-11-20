@@ -16,7 +16,6 @@ import { EngineError } from './engines.js';
 const FRESH_MS = 45_000;
 const MAX_ATTEMPTS = 10;
 const TRANSIENT_REASONS = new Set(['too_many_events', 'over_event_limit', 'daily_cap_reached']);
-const DONE_REASONS = new Set(['granted', 'already_earned']);
 
 const clean = (s, n = 60) => String(s ?? '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, n);
 const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
@@ -58,6 +57,8 @@ export async function updateProfile(ctx, body) {
   if (next.commission_dest === 'moneypenny' && cur.commission_dest !== 'moneypenny') {
     if (!ctx.engines.mnp) throw new HttpError(409, 'engine_not_connected', 'connect Moneypenny first (MNP_BASE_URL, MNP_KEY_ID, MNP_SECRET) before sending commissions there');
     if (!next.mnp_enabled) throw new HttpError(409, 'engine_off', 'switch the Moneypenny engine on first');
+    // v1 ruling: commission to Moneypenny stays OFF until Moneypenny accepts these postings (docs/SUITE.md). Explicit server switch, not a UI toggle.
+    if (ctx.env.MNP_COMMISSION_ENABLED !== '1') throw new HttpError(409, 'not_in_v1', 'sending commissions to Moneypenny is not enabled in this version');
   }
   if (next.commission_dest === 'moneypenny' && !next.mnp_enabled) throw new HttpError(409, 'engine_off', 'cannot switch Moneypenny off while commissions are sent there: claims would be stranded');
   const cols = entries.map(([k]) => k);
@@ -95,12 +96,12 @@ export async function syncUser(ctx, userId) {
       if (l.engine === 'mono') {
         if (l.desired === 'suspended') await adapter.suspend({ email: u.email });
         else await adapter.provision({ email: u.email, name: clean(u.name, 120), role: u.role, team_ref: u.parent_id });
-      } else {
+      } else if (l.desired === 'active') {
         await adapter.balance(u.email); // Moneypenny makes an account on first credit; this proves the door works for this person
-      }
+      } // Moneypenny has no suspend call: earning stops on this side; credits already granted stay there (recorded below as no_remote_suspend)
       await atomic(ctx, async () => [
         { sql: "UPDATE engine_links SET state='linked', attempts=attempts+1, last_error=NULL, linked_at=? WHERE user_id=? AND engine=? AND desired=?", params: [ctx.now(), userId, l.engine, l.desired] },
-        ...(await auditStmts({ ...ctx, actor: { type: 'system' } }, [{ action: 'engine.link', target: `user:${userId}`, meta: { engine: l.engine, desired: l.desired } }])),
+        ...(await auditStmts({ ...ctx, actor: { type: 'system' } }, [{ action: 'engine.link', target: `user:${userId}`, meta: { engine: l.engine, desired: l.desired, ...(l.engine === 'mnp' && l.desired === 'suspended' ? { note: 'no_remote_suspend' } : {}) } }])),
       ]);
     } catch (e) {
       const attempts = l.attempts + 1;
@@ -206,7 +207,7 @@ export async function convertRequest(ctx, user, body, idem) {
   if (user.status !== 'active' || !user.email_verified || !user.email) throw new HttpError(409, 'email_unverified', 'verify your e-mail first');
   if (!isInt(body?.credits, 1, 100_000_000)) throw new HttpError(422, 'invalid_field', 'credits must be a whole number');
   let r;
-  try { r = await ctx.engines.mnp.convertRequest({ email: user.email, credits: body.credits, idem: `pcw:${user.id}:${idem}`.slice(0, 120) }); } catch (e) {
+  try { r = await ctx.engines.mnp.convertRequest({ email: user.email, credits: body.credits, idem: `pcw:${user.id}:${(await ctx.hash(idem)).slice(0, 40)}` }); } catch (e) {
     if (e instanceof EngineError) throw new HttpError(e.definitive ? 422 : 503, e.definitive ? (String(e.code).replace(/[^a-z0-9_]/gi, '').slice(0, 40) || 'refused') : 'engine_unavailable', e.definitive ? clean(e.message, 160) : 'Moneypenny is not available right now; nothing was changed. Try again.');
     throw e;
   }
@@ -284,7 +285,8 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
         email: p.email, event_key: p.event_key, cash_minor: p.amount_minor, sale_ref: p.sale_ref, gen: p.gen,
         payer_email: `${String(p.customer_hash || p.sale_id).replace(/[^a-z0-9]/gi, '').slice(0, 40)}@payer.invalid`,
       });
-      if (DONE_REASONS.has(r.reason)) { state = 'posted'; granted = r.granted; }
+      if ((r.reason === 'granted' && r.granted > 0) || r.reason === 'already_earned') { state = 'posted'; granted = r.granted; }
+      else if (!r.reason || r.reason === 'granted') { state = 'pending'; err = 'unclear_answer'; } // ok but nothing granted / no reason: outcome unknown, retry with the same key, never mark posted
       else if (TRANSIENT_REASONS.has(r.reason)) { state = 'pending'; err = r.reason; definite = true; }
       else { state = 'rejected'; err = r.reason; definite = true; }
     } catch (e) {
@@ -314,6 +316,22 @@ export async function requeuePosting(ctx, seq) {
     ...(await auditStmts(ctx, [{ action: 'moneypenny.requeue', target: `ledger:${seq}`, meta: { was: p.state, reason: p.last_error } }])),
   ]);
   return ctx.db.first('SELECT * FROM mp_postings WHERE ledger_seq=?', [seq]);
+}
+
+/** Owner: give a DEFINITELY rejected claim back to the ledger (state 'rejected' only: 'dead' means the outcome is unknown and stays manual). */
+export async function releasePosting(ctx, seq) {
+  const p = await ctx.db.first('SELECT * FROM mp_postings WHERE ledger_seq=?', [seq]);
+  if (!p) throw new HttpError(404, 'not_found', 'posting not found');
+  if (p.state !== 'rejected' || p.granted_credits != null) throw new HttpError(409, 'bad_state', 'only a definitely rejected posting can be released');
+  await atomic(ctx, async () => {
+    if (!(await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE ledger_seq=? AND state='rejected' AND granted_credits IS NULL", [seq]))) return [];
+    return [
+      { sql: "DELETE FROM mp_postings WHERE ledger_seq=? AND state='rejected' AND granted_credits IS NULL", params: [seq] },
+      ...(await ledgerStmts(ctx, [{ account_id: p.user_id, kind: 'payout_release', amount_minor: p.amount_minor, eligible_at: ctx.now(), ref: `mprelease:${seq}`, memo: 'Moneypenny refused; returned to balance' }])),
+      ...(await auditStmts(ctx, [{ action: 'moneypenny.release', target: `ledger:${seq}`, meta: { amount_minor: p.amount_minor, reason: p.last_error } }])),
+    ];
+  });
+  return { released: true, ledger_seq: seq };
 }
 
 export async function suiteStatus(ctx) {

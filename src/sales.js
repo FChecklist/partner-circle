@@ -202,10 +202,11 @@ export async function applyRefund(ctx, sale, meta = {}) {
   // Claims are read INSIDE the batch builder: a concurrent claim/delivery moves the ledger or action-log tail, so this batch rebuilds and re-reads.
   const usage = typeof meta.usage_verified === 'boolean' ? (meta.usage_verified ? 1 : 0) : null;
   await atomic(ctx, async () => {
-    const claims = await ctx.db.all('SELECT ledger_seq, state, attempts, amount_minor, user_id FROM mp_postings WHERE ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)', [sale.id]);
-    const untouched = claims.filter((c) => c.state === 'pending' && c.attempts === 0);
+    const claims = await ctx.db.all('SELECT ledger_seq, state, sent_at, amount_minor, user_id FROM mp_postings WHERE ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)', [sale.id]);
+    const isUntouched = (c) => c.state === 'pending' && c.sent_at == null; // never contacted Moneypenny, so no credit can exist
+    const untouched = claims.filter(isUntouched);
     const sentNow = new Set(sent);
-    for (const c of claims) if (!(c.state === 'pending' && c.attempts === 0)) sentNow.add(c.ledger_seq);
+    for (const c of claims) if (!isUntouched(c)) sentNow.add(c.ledger_seq);
     const mpRelease = untouched.map((c) => ({ account_id: c.user_id, kind: 'payout_release', amount_minor: c.amount_minor, eligible_at: ctx.now(), ref: `mprelease:${c.ledger_seq}`, memo: 'refund before Moneypenny was told' }));
     const voids = entries
       .filter((e) => !sentNow.has(e.seq))
@@ -215,7 +216,7 @@ export async function applyRefund(ctx, sale, meta = {}) {
       { sql: "UPDATE sales SET status='refunded', refunded_at=?, refund_after_payout=?, usage_verified=?, refund_reason=?, dispute_status=COALESCE(?, dispute_status) WHERE id=? AND status<>'refunded'",
         params: [ctx.now(), flag, usage, meta.reason || null, meta.disputeStatus || null, sale.id] },
       ...cancel.sql,
-      ...untouched.map((c) => ({ sql: "DELETE FROM mp_postings WHERE ledger_seq=? AND state='pending' AND attempts=0", params: [c.ledger_seq] })),
+      ...untouched.map((c) => ({ sql: "DELETE FROM mp_postings WHERE ledger_seq=? AND state='pending' AND sent_at IS NULL", params: [c.ledger_seq] })),
       ...(await ledgerStmts(ctx, [...mpRelease, ...voids, ...cancel.ledger])),
       ...(await auditStmts(ctx, [{ action: flag ? 'sale.refunded_after_payout' : 'sale.refunded', target: `sale:${sale.id}`,
         meta: { voided: voids.length, kept_paid: sentNow.size, cancelled_payouts: cancel.payouts.map((p) => p.id), reason: meta.reason || null, usage_verified: meta.usage_verified ?? null } }])),

@@ -52,7 +52,8 @@ CREATE TABLE mp_postings (
   sale_ref TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','posted','rejected','dead')),
   attempts INTEGER NOT NULL DEFAULT 0,
-  gen INTEGER NOT NULL DEFAULT 0,            -- bumped when Moneypenny gave a definite "not granted" answer, so the retry uses a fresh Idempotency-Key (same event_key: still cannot pay twice)
+  sent_at INTEGER,                           -- set BEFORE the first call to Moneypenny and never reset: from then on the credit may exist, so a refund flags it and never voids it
+  gen INTEGER NOT NULL DEFAULT 0,           -- bumped when Moneypenny gave a definite "not granted" answer, so the retry uses a fresh Idempotency-Key (same event_key: still cannot pay twice)
   last_error TEXT,
   next_try_at INTEGER NOT NULL DEFAULT 0,
   granted_credits INTEGER,

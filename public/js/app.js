@@ -169,8 +169,9 @@
       if (mp.lines.settling) body.push(E('p', { class: 'mut' }, mp.lines.settling));
       if (mp.can_convert > 0 && mp.conversion_enabled && me.status === 'active') {
         var amt = E('input', { type: 'number', min: '1', max: String(mp.can_convert), value: String(mp.can_convert) });
+        var convKey = 'w' + Date.now() + Math.random().toString(16).slice(2, 10); // one key per render: a double click is the same request
         body.push(field('How many ' + cur + ' to convert', amt), E('button', { class: 'btn alt', on: { click: act(function () {
-          return api('POST', '/v1/me/moneypenny/convert-request', { credits: Number(amt.value) }, { 'idempotency-key': 'w' + Date.now() + Math.random().toString(16).slice(2, 8) });
+          return api('POST', '/v1/me/moneypenny/convert-request', { credits: Number(amt.value) }, { 'idempotency-key': convKey });
         }, 'Request sent. A person approves it before any money moves.') } }, 'Ask to convert'));
       }
       nodes.push(card.apply(null, body.concat([soft(mp.status)])));

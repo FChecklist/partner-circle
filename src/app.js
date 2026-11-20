@@ -177,8 +177,14 @@ route('GET', '/v1/admin/users/:id/kyc', adm('kyc.verify'), async ({ ctx, params 
 route('POST', '/v1/admin/users/:id/verify-email', adm('kyc.verify'), async ({ ctx, params }) => U.ownerVerifyEmail(ctx, params.id));
 route('POST', '/v1/admin/users/:id/placement', adm('users.approve'), async ({ ctx, params, body }) => U.setPlacement(ctx, params.id, body || {}));
 route('POST', '/v1/admin/users/:id/erase', adm('users.erase'), async ({ ctx, params }) => {
+  if (await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE user_id=? AND state IN ('pending','rejected','dead')", [params.id])) {
+    throw new HttpError(409, 'posting_open', 'a commission posting to Moneypenny is still open; settle or requeue it first');
+  }
   await relink(ctx, params.id, 'suspended'); // tell the engines to stop earning BEFORE the e-mail is erased
-  return U.eraseUser(ctx, params.id);
+  const r = await U.eraseUser(ctx, params.id);
+  await ctx.db.run('DELETE FROM engine_links WHERE user_id=?', [params.id]);
+  await ctx.db.run('DELETE FROM engine_cache WHERE user_id=?', [params.id]);
+  return r;
 });
 
 // ---------------------------------------------------------------- suite: tenant, engines, commissions in Moneypenny

@@ -50,7 +50,7 @@ export async function updateProfile(ctx, body) {
   const entries = Object.entries(body || {});
   if (!entries.length) throw new HttpError(422, 'invalid_body', 'send at least one field');
   for (const [k, v] of entries) {
-    if (!PROFILE_RULES[k]) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
+    if (!Object.hasOwn(PROFILE_RULES, k)) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
     if (!PROFILE_RULES[k](v)) throw new HttpError(422, 'invalid_field', `${k} is malformed or out of range`);
   }
   const cur = await getProfile(ctx);
@@ -59,6 +59,7 @@ export async function updateProfile(ctx, body) {
     if (!ctx.engines.mnp) throw new HttpError(409, 'engine_not_connected', 'connect Moneypenny first (MNP_BASE_URL, MNP_KEY_ID, MNP_SECRET) before sending commissions there');
     if (!next.mnp_enabled) throw new HttpError(409, 'engine_off', 'switch the Moneypenny engine on first');
   }
+  if (next.commission_dest === 'moneypenny' && !next.mnp_enabled) throw new HttpError(409, 'engine_off', 'cannot switch Moneypenny off while commissions are sent there: claims would be stranded');
   const cols = entries.map(([k]) => k);
   await atomic(ctx, async () => [
     { sql: `UPDATE tenant_profile SET ${cols.map((c) => `${c}=?`).join(',')}, updated_at=? WHERE id='self'`, params: [...cols.map((c) => next[c]), ctx.now()] },
@@ -167,8 +168,11 @@ const SOFT = {
 
 export async function dashboard(ctx, user) {
   const prof = await getProfile(ctx);
-  // best-effort, never blocks the page
-  try { await syncUser(ctx, user.id); } catch { /* retried later */ }
+  // best-effort, never blocks the page. People approved before the suite existed get their link rows here.
+  try {
+    if (user.status === 'active' && !(await ctx.db.first('SELECT 1 AS x FROM engine_links WHERE user_id=?', [user.id]))) await enqueueLinks(ctx, user.id, 'active');
+    await syncUser(ctx, user.id);
+  } catch { /* retried later */ }
   if (prof.commission_dest === 'moneypenny') { try { await runPostings(ctx, { userId: user.id, limit: 10 }); } catch { /* retried later */ } }
   const mnpOn = !!prof.mnp_enabled, monoOn = !!prof.mono_enabled;
   const email = user.email;
@@ -203,7 +207,7 @@ export async function convertRequest(ctx, user, body, idem) {
   if (!isInt(body?.credits, 1, 100_000_000)) throw new HttpError(422, 'invalid_field', 'credits must be a whole number');
   let r;
   try { r = await ctx.engines.mnp.convertRequest({ email: user.email, credits: body.credits, idem: `pcw:${user.id}:${idem}`.slice(0, 120) }); } catch (e) {
-    if (e instanceof EngineError) throw new HttpError(e.definitive ? 422 : 503, e.definitive ? e.code : 'engine_unavailable', e.definitive ? clean(e.message, 160) : 'Moneypenny is not available right now; nothing was changed. Try again.');
+    if (e instanceof EngineError) throw new HttpError(e.definitive ? 422 : 503, e.definitive ? (String(e.code).replace(/[^a-z0-9_]/gi, '').slice(0, 40) || 'refused') : 'engine_unavailable', e.definitive ? clean(e.message, 160) : 'Moneypenny is not available right now; nothing was changed. Try again.');
     throw e;
   }
   await atomic(ctx, () => auditStmts(ctx, [{ action: 'moneypenny.convert_request', target: `user:${user.id}`, meta: { credits: body.credits, request_id: r.request_id } }]));
@@ -217,6 +221,7 @@ const MATURED = `FROM ledger l JOIN sales s ON s.id = l.sale_id JOIN users u ON 
  WHERE l.kind IN ('commission','override') AND l.amount_minor > 0 AND l.eligible_at <= ?
    AND s.status = 'recorded' AND s.rzp_status = 'confirmed' AND COALESCE(s.dispute_status,'') <> 'open'
    AND u.status = 'active' AND u.email_verified = 1 AND u.email IS NOT NULL AND u.erased_at IS NULL
+   AND EXISTS (SELECT 1 FROM user_kyc k WHERE k.user_id = u.id AND k.status = 'verified')
    AND NOT EXISTS (SELECT 1 FROM payout_items pi WHERE pi.ledger_seq = l.seq)
    AND NOT EXISTS (SELECT 1 FROM mp_postings mp WHERE mp.ledger_seq = l.seq)`;
 
@@ -236,12 +241,19 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
     for (const r of rows) {
       const saleRef = r.kind === 'commission' ? r.pid : `${r.pid}:override:${r.account_id}`;
       try {
-        await atomic(ctx, async () => [
-          { sql: 'INSERT INTO mp_postings (ledger_seq,user_id,amount_minor,event_key,sale_ref,state,created_at) VALUES (?,?,?,?,?,?,?)', params: [r.seq, r.account_id, r.amount_minor, `pc:${r.ref}`, saleRef, 'pending', ctx.now()] },
-          ...(await ledgerStmts(ctx, [{ account_id: r.account_id, kind: 'payout_reserve', amount_minor: -r.amount_minor, eligible_at: ctx.now(), ref: `mpclaim:${r.seq}`, memo: 'sent to Moneypenny' }])),
-          ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: 'moneypenny.claim', target: `ledger:${r.seq}`, meta: { amount_minor: r.amount_minor, kind: r.kind } }])),
-        ]);
-        out.claimed += 1;
+        let did = false;
+        await atomic(ctx, async () => {
+          // re-check inside the batch builder: a refund or claim that landed since the list was read makes this entry ineligible
+          did = false;
+          if (!(await ctx.db.first(`SELECT l.seq ${MATURED} AND l.seq=?`, [ctx.now(), r.seq]))) return [];
+          did = true;
+          return [
+            { sql: 'INSERT INTO mp_postings (ledger_seq,user_id,amount_minor,event_key,sale_ref,state,created_at) VALUES (?,?,?,?,?,?,?)', params: [r.seq, r.account_id, r.amount_minor, `pc:${r.ref}`, saleRef, 'pending', ctx.now()] },
+            ...(await ledgerStmts(ctx, [{ account_id: r.account_id, kind: 'payout_reserve', amount_minor: -r.amount_minor, eligible_at: ctx.now(), ref: `mpclaim:${r.seq}`, memo: 'sent to Moneypenny' }])),
+            ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: 'moneypenny.claim', target: `ledger:${r.seq}`, meta: { amount_minor: r.amount_minor, kind: r.kind } }])),
+          ];
+        });
+        if (did) out.claimed += 1;
       } catch (e) {
         if (!/mp_postings|already belongs to a payout|UNIQUE constraint failed/.test(String(e.message))) throw e; // someone else claimed it first: fine
       }
@@ -254,6 +266,19 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
         ${userId ? 'AND p.user_id=?' : ''} ORDER BY p.ledger_seq LIMIT ?`, userId ? [ctx.now(), userId, limit] : [ctx.now(), limit]);
   for (const p of due) {
     let state, err = null, granted = null, attempts = p.attempts + 1, definite = false; // definite = Moneypenny answered "not granted": the next try needs a fresh Idempotency-Key
+    // Mark "contacted" BEFORE the call, in a batch that also moves the action-log tail (so a concurrent refund rebuilds and sees it). From here a refund flags, never voids.
+    let marked = false;
+    await atomic(ctx, async () => {
+      marked = false;
+      const cur = await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE ledger_seq=? AND state='pending'", [p.ledger_seq]);
+      if (!cur) return [];
+      marked = true;
+      return [
+        { sql: "UPDATE mp_postings SET sent_at=COALESCE(sent_at, ?) WHERE ledger_seq=? AND state='pending'", params: [ctx.now(), p.ledger_seq] },
+        ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: 'moneypenny.send', target: `ledger:${p.ledger_seq}`, meta: { attempt: attempts } }])),
+      ];
+    });
+    if (!marked) continue; // taken back by a refund in the meantime
     try {
       const r = await mnp.postCommission({
         email: p.email, event_key: p.event_key, cash_minor: p.amount_minor, sale_ref: p.sale_ref, gen: p.gen,
@@ -264,7 +289,8 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
       else { state = 'rejected'; err = r.reason; definite = true; }
     } catch (e) {
       err = clean(e?.code || e?.message, 80);
-      state = e instanceof EngineError && e.definitive ? 'rejected' : attempts >= MAX_ATTEMPTS ? 'dead' : 'pending';
+      definite = e instanceof EngineError && e.definitive; // a definite refusal: the retry after a requeue needs a fresh Idempotency-Key
+      state = definite ? 'rejected' : attempts >= MAX_ATTEMPTS ? 'dead' : 'pending';
     }
     if (state === 'pending' && attempts >= MAX_ATTEMPTS) state = 'dead';
     await atomic(ctx, async () => [

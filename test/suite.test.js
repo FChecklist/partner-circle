@@ -33,7 +33,7 @@ test('Moneypenny border: signed calls work; a bad secret, a replayed nonce and a
   const good = moneypennyClient({ baseUrl: 'http://localhost:1', keyId: fake.keyId, secret: fake.secret, fetchImpl: fake.fetch });
   assert.equal((await good.balance('a@example.test')).credits, 500);
   const bad = moneypennyClient({ baseUrl: 'http://localhost:1', keyId: fake.keyId, secret: 'wrong-secret-0123456789', fetchImpl: fake.fetch });
-  await assert.rejects(bad.balance('a@example.test'), (e) => e instanceof EngineError && e.code === 'bad_signature' && e.definitive);
+  await assert.rejects(bad.balance('a@example.test'), (e) => e instanceof EngineError && e.code === 'bad_signature' && !e.definitive);
   const args = { email: 'a@example.test', event_key: 'k1', cash_minor: 83000, sale_ref: 'pay_1', payer_email: 'x@payer.invalid' };
   assert.equal((await good.postCommission(args)).granted, 1000);
   assert.equal((await good.postCommission(args)).granted, 1000, 'same idempotency key returns the first answer');
@@ -309,4 +309,13 @@ test('AI readiness: every route is described; no route that moves money is open 
   assert.ok(r.data._untrusted);
   const o = await h.call('GET', '/v1/admin/summary', { key: h.owner });
   assert.equal(o.data._untrusted, undefined);
+});
+
+test('Moneypenny signature is the pinned six-part form (timestamp, nonce, method, path+query, body hash, idempotency key)', async () => {
+  const { mnpSign } = await import('../src/engines.js');
+  const { createHmac } = await import('node:crypto');
+  const parts = { ts: '1700000000000', nonce: 'n1', method: 'POST', pathWithQuery: '/v1/x?a=1', bodyHash: 'abc', idem: 'k-1' };
+  const want = createHmac('sha256', 'secret').update('1700000000000\nn1\nPOST\n/v1/x?a=1\nabc\nk-1').digest('hex');
+  assert.equal(await mnpSign('secret', parts), want);
+  assert.notEqual(await mnpSign('secret', { ...parts, idem: '' }), want, 'the idempotency key is part of what is signed');
 });

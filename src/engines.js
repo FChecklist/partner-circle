@@ -36,15 +36,16 @@ async function send(fetchImpl, url, init, timeoutMs) {
 
 function failFrom(res, data) {
   const code = data?.error?.code || `http_${res.status}`;
-  // 4xx (except timeout/rate-limit) means the engine read the request and refused it. 5xx / 408 / 429 mean "try again".
-  const definitive = res.status >= 400 && res.status < 500 && ![408, 429].includes(res.status);
+  // 4xx (except 401 clock/replay, timeout and rate-limit) means the engine read the request and refused it. 401 / 5xx / 408 / 429 mean "try again".
+  const definitive = res.status >= 400 && res.status < 500 && ![401, 408, 429].includes(res.status);
   return new EngineError(code, String(data?.error?.message || `engine answered ${res.status}`).slice(0, 200), { status: res.status, definitive });
 }
 
 // ------------------------------------------------------------------ Moneypenny
 
-export function mnpSign(secret, { ts, nonce, method, pathWithQuery, bodyHash }) {
-  return hmacHex(secret, [ts, nonce, method, pathWithQuery, bodyHash].join('\n'));
+// Six parts, per contract/v1/openapi.json x-signing: the sixth is the Idempotency-Key header (empty string when none, e.g. a GET).
+export function mnpSign(secret, { ts, nonce, method, pathWithQuery, bodyHash, idem = '' }) {
+  return hmacHex(secret, [ts, nonce, method, pathWithQuery, bodyHash, idem].join('\n'));
 }
 
 export function moneypennyClient({ baseUrl, keyId, secret, fetchImpl, now = () => Date.now(), timeoutMs = TIMEOUT_MS }) {
@@ -55,15 +56,14 @@ export function moneypennyClient({ baseUrl, keyId, secret, fetchImpl, now = () =
     const raw = body === undefined ? '' : JSON.stringify(body);
     const ts = String(now());
     const nonce = randHex(12);
+    if (method !== 'GET' && !idem) throw new Error('every Moneypenny write needs an idempotency key');
+    const idemH = idem ? String(idem).slice(0, 120) : '';
     const headers = {
       'x-mnp-key': keyId, 'x-mnp-timestamp': ts, 'x-mnp-nonce': nonce,
-      'x-mnp-signature': await mnpSign(secret, { ts, nonce, method, pathWithQuery, bodyHash: await sha256Hex(raw) }),
+      'x-mnp-signature': await mnpSign(secret, { ts, nonce, method, pathWithQuery, bodyHash: await sha256Hex(raw), idem: idemH }),
     };
     if (body !== undefined) headers['content-type'] = 'application/json';
-    if (method !== 'GET') {
-      if (!idem) throw new Error('every Moneypenny write needs an idempotency key');
-      headers['idempotency-key'] = String(idem).slice(0, 120);
-    }
+    if (method !== 'GET') headers['idempotency-key'] = idemH;
     const { res, data } = await send(fetchImpl, base + pathWithQuery, { method, headers, body: body === undefined ? undefined : raw }, timeout);
     if (!res.ok || data?.ok === false) throw failFrom(res, data);
     return data;
@@ -154,7 +154,7 @@ export function mockMoneypenny({ keyId = 'mnpk_test', secret = 'mnp-secret-01234
     if (u.pathname === '/health') return send(200, { ok: true });
     if (!h['x-mnp-key'] || !h['x-mnp-signature']) return err(401, 'unsigned', 'Signed headers are missing.');
     if (h['x-mnp-key'] !== keyId) return err(401, 'bad_signature', 'Signature not accepted.');
-    const expect = await mnpSign(secret, { ts: h['x-mnp-timestamp'], nonce: h['x-mnp-nonce'], method, pathWithQuery: u.pathname + u.search, bodyHash: await sha256Hex(raw) });
+    const expect = await mnpSign(secret, { ts: h['x-mnp-timestamp'], nonce: h['x-mnp-nonce'], method, pathWithQuery: u.pathname + u.search, bodyHash: await sha256Hex(raw), idem: h['idempotency-key'] || '' });
     if (!timingSafeEqualStr(expect, String(h['x-mnp-signature']))) return err(401, 'bad_signature', 'Signature not accepted.');
     if (Math.abs(Date.now() - Number(h['x-mnp-timestamp'])) > 300000) return err(401, 'stale_timestamp', 'Timestamp is too old or too new.');
     if (st.nonces.has(h['x-mnp-nonce'])) return err(401, 'replayed', 'This request was already used.');

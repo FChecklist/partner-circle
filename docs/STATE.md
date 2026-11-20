@@ -25,3 +25,7 @@ Branch `feat/partner-circle-v1`, local only (no remote; a public repo needs Raja
 
 ## Before go-live (all need the owner)
 Two clean audits; Moneypenny live check with test tenant keys (`MNP_*` secrets, masked); Monopoly routes and keys; migration 0004 on D1; Rajat's yes for any repo.
+
+## Update 21 Nov 2026: audit pass 1 = FAIL, fixes applied (needs pass 2 by a fresh auditor)
+Fixed: Moneypenny signature now six-part incl. Idempotency-Key (pinned test vector); 401 retryable; `sent_at` marks "may exist at Moneypenny" so refunds flag, never void, a contacted claim; claim re-checked inside the atomic builder; `updateProfile` uses `Object.hasOwn`, refuses mnp off while commission goes to Moneypenny; dashboard backfills engine links; KYC gate on Moneypenny postings; erase refused while a posting is open, engine link/cache rows purged; convert button reuses one Idempotency-Key per render; engine error codes sanitised.
+Note for v2: money going via Moneypenny skips the payout flow, so TDS and KYC rules must be re-checked then. Commission to Moneypenny stays OFF. Full local suite 126/126; laptop re-run still to do. Nothing deployed, no remote.

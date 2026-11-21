@@ -1,10 +1,11 @@
 {
   "product": "Partner Circle",
   "version": "1.0.1",
-  "releasedAt": "2026-11-21T05:30:47Z",
-  "releasedAtIST": "21 Nov 2026 11:00 IST",
-  "commit": "31c7c4a4f98e234f2a7dc571359367a20741ae92",
+  "releasedAt": "2026-11-21T10:00:00Z",
+  "releasedAtIST": "21 Nov 2026 15:30 IST",
+  "commit": "94a03832590df8e90bff4e17bad21eac06b92293",
   "changes": [
+    "1.0.1: refund/claim and mark-failed re-check payout state inside the atomic step (no release of a sent payout); owner queue flags refunded sale in waiting payout; consent required on server, privacy page, data/rotate/erase buttons; prospect replies uniform and counted",
     "Front door for the Moneypenny / Corporate Monopoly / Partner Circle suite: one dashboard, signed provisioning, degraded mode",
     "Commission hooks to Moneypenny built but OFF in v1 (server switch MNP_COMMISSION_ENABLED, ledger-only)",
     "Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes",

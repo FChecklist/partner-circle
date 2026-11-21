@@ -130,7 +130,7 @@ test('suspended partner: new sales are blocked, not paid', async () => {
 
 test('Refer and Earn members earn the (lower) refer rate and have no upline overrides', async () => {
   const h = await mk();
-  const r = (await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rita' } })).data;
+  const r = (await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rita' } })).data;
   const ck = await click(h, { key: r.api_key });
   const s = await h.sale('mom', { order_id: 'rf1', click_id: ck, amount_minor: 100000 });
   assert.equal(s.data.commission_minor, 5000); // refer_bps 500

@@ -34,9 +34,10 @@ route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx })
 
 // (idem:false: the response holds a login key, which must never be cached)
 route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => {
+  if (body?.consent !== true) throw new HttpError(422, 'consent_required', 'please read the privacy notice and agree to it to sign up');
   const out = await U.register(ctx, body);
   // DPDP: the sign-up form shows the privacy notice and the person ticks it; the consent and the notice version are recorded in the audit log
-  if (body?.consent === true) await audit({ ...ctx, actor: { type: 'user', id: out.user.id } }, 'user.consent', `user:${out.user.id}`, { notice_version: PRIVACY_NOTICE_VERSION });
+  await audit({ ...ctx, actor: { type: 'user', id: out.user.id } }, 'user.consent', `user:${out.user.id}`, { notice_version: PRIVACY_NOTICE_VERSION });
   return [201, out];
 });
 
@@ -101,12 +102,12 @@ route('POST', '/v1/me/erase-request', me, async ({ ctx, actor }) => {
   await audit(ctx, 'user.erase_requested', `user:${actor.user.id}`, {});
   return { requested: true, note: 'The owner completes erasure once money owed and any open payout are settled. Data held by Moneypenny and Corporate Monopoly is removed through those products.' };
 });
-route('POST', '/v1/me/keys/rotate', me, async ({ ctx, actor }) => {
+route('POST', '/v1/me/keys/rotate', { ...me, idem: false }, async ({ ctx, actor }) => {
   // new key first, then the key used for this call is revoked: a stolen key can be cut off by its owner
   const k = await createKey(ctx, { kind: 'user', user_id: actor.user.id, label: 'rotated by owner of the account', created_by: actor.keyId },
     { audit: (nk) => [{ action: 'key.rotate', target: `key:${nk.id}`, meta: { replaces: actor.keyId, user_id: actor.user.id } }] });
   await revokeKey(ctx, actor.keyId);
-  return { api_key: k.token, note: 'The old key no longer works. Store this one safely.' };
+  return { api_key: k.token, note: 'The old key no longer works. Store this one safely. If you did not do this yourself, tell the owner at once: whoever rotated may have had your old key.' };
 });
 route('GET', '/v1/leaderboard', me, async ({ ctx, actor }) => ({
   // Anonymous: other members' names and handles are not shown (privacy, and handles let anyone pick a sponsor to poach). Only your own row is named.

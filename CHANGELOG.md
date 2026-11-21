@@ -2,6 +2,14 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.1 - 21 Nov 2026
+- Money fix: a refund or a claim that arrives at the same moment the owner approves a payout can no longer give that payout's money back to the partner (the check is now made again inside the same step that writes the change). Marking a payout as failed has the same re-check, and a payout already handed over (also one paid by hand) needs the owner to confirm with the provider first.
+- The owner queue now flags a waiting payout that contains a refunded sale, and lists people who asked to be erased.
+- Privacy: sign-up now needs the consent tick on the server too; a public privacy page (/privacy.html); buttons in the account to download your data, rotate your key and ask for erasure.
+- Prospect registration: a held e-mail now gets the same reply as a fresh one, every try counts towards a limit of 100 an hour, and the limit of 50 counts only prospects still inside their protection period.
+- Key rotation replies are never stored with an Idempotency-Key.
+- Docs: README migrations list and test counts corrected; version file kept in step with the release.
+
 ## 1.0.0 - 21 Nov 2026 11:00 IST
 - Front door for the Moneypenny / Corporate Monopoly / Partner Circle suite: one dashboard (Moneypenny credits owned with the 100 = 1 US$ rate and real money beside it, Monopoly targets and achievements, commissions), signed provisioning, degraded mode when an engine is down.
 - Commission to Moneypenny is built but OFF in v1 (`MNP_COMMISSION_ENABLED` server switch; commissions stay in the ledger and the owner-approved payout flow). Payouts are off by default (mock adapter).

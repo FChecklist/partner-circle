@@ -240,12 +240,19 @@ export async function markFailed(ctx, id, reason, { reversal = false, definitive
   if (!allowed.includes(p.status)) throw new HttpError(409, 'bad_state', `a ${p.status} payout cannot be marked failed`);
   const wasPaid = p.status === 'paid';
   // A payout the provider may have been contacted about is only released on a DEFINITE answer (provider webhook failed/reversed, or the owner confirmed with the provider that nothing was sent).
-  if (p.sent_at != null && !reversal && !definitive) throw new HttpError(409, 'maybe_sent', 'the provider may have paid this; confirm with the provider that nothing was sent, then mark it failed with confirmed_not_sent');
-  await atomic(ctx, async () => [
+  const maybeSent = (r) => r.sent_at != null || r.status === 'processing'; // processing = handed over (also for manual payouts made outside the API)
+  if (maybeSent(p) && !reversal && !definitive) throw new HttpError(409, 'maybe_sent', 'the provider may have paid this; confirm with the provider that nothing was sent, then mark it failed with confirmed_not_sent');
+  await atomic(ctx, async () => {
+    // re-checked inside the builder: an execute that lands after the first read must not be released as "not sent"
+    const cur = await ctx.db.first('SELECT status, sent_at FROM payouts WHERE id=?', [id]);
+    if (!cur || !allowed.includes(cur.status)) throw new HttpError(409, 'bad_state', 'the payout changed; reload it');
+    if (maybeSent(cur) && !reversal && !definitive) throw new HttpError(409, 'maybe_sent', 'the provider may have paid this; confirm with the provider that nothing was sent, then mark it failed with confirmed_not_sent');
+    return [
     { sql: `UPDATE payouts SET status='failed', note=?, reversed_at=? WHERE id=? AND status IN (${allowed.map((s) => `'${s}'`).join(',')})`, params: [reason || null, wasPaid ? ctx.now() : null, id] },
     ...(await releaseStmts(ctx, p, wasPaid ? 'payout reversed by the provider' : 'payout failed')),
     ...(await auditStmts(ctx, [{ action: wasPaid ? 'payout.reversed' : 'payout.failed', target: `payout:${id}`, meta: { reason: reason || null, was_paid: wasPaid } }])),
-  ]);
+    ];
+  });
   await notify(ctx, p.user_id, 'Your payout could not be completed', 'Your payout could not be completed. The money is back in your balance and you can request it again.');
   return payoutView(await getPayout(ctx, id));
 }
@@ -265,7 +272,7 @@ export async function approvalQueue(ctx) {
   const payouts = await ctx.db.all(
     `SELECT p.*, u.name, u.handle,
         (SELECT COUNT(*) FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq JOIN sales s ON s.id = l.sale_id
-          WHERE pi.payout_id = p.id AND s.refund_after_payout = 1) AS flagged_refunds
+          WHERE pi.payout_id = p.id AND (s.refund_after_payout = 1 OR s.status = 'refunded')) AS flagged_refunds
        FROM payouts p JOIN users u ON u.id = p.user_id WHERE p.status = 'pending_approval' ORDER BY p.created_at`);
   const claims = await ctx.db.all(
     `SELECT s.id, s.site_id, s.order_id, s.net_minor, s.disputed_at, s.dispute_note, u.name FROM sales s LEFT JOIN users u ON u.id = s.user_id
@@ -278,6 +285,8 @@ export async function approvalQueue(ctx) {
     kyc,
     payouts: payouts.map((p) => ({ ...payoutView(p), name: p.name, handle: p.handle, flagged_refunds: p.flagged_refunds })),
     claims,
+    // people who asked to be erased (the owner completes it once money owed and any open payout are settled)
+    erase_requests: await ctx.db.all("SELECT substr(a.target, 6) AS user_id, u.name, u.handle, a.ts AS requested_at FROM audit_log a JOIN users u ON u.id = substr(a.target, 6) WHERE a.action='user.erase_requested' AND u.status <> 'erased' ORDER BY a.ts DESC LIMIT 50"),
     tds_confirmed: !!policy.tds_confirmed,
   };
 }

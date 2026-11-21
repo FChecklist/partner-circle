@@ -1,6 +1,6 @@
 # Partner Circle: state and handover (19 Nov 2026)
 
-Branch `feat/partner-circle-v1`, local only (no remote; a public repo needs Rajat's typed yes). Nothing deployed. Builder: this session. **Audits: none yet. An independent auditor must do two passes in a row; default FAIL if unsure on money, security or data.**
+Branch `feat/partner-circle-v1`, pushed to the private repo FChecklist/partner-circle (PR #1). Nothing deployed. Builder: this session. **Audits: five local passes and four cloud audits so far, none clean yet (history in docs/AUDIT-pass*.md and the PR comments). An independent auditor must do two passes in a row; default FAIL if unsure on money, security or data.**
 
 ## What exists
 - Base product (earlier commits): partners, links, sales, hash-chained ledger and audit log, payouts (owner approval), schemes, prospects, embed snippet, web UI, D1 adapter.
@@ -34,4 +34,4 @@ Note for v2: money going via Moneypenny skips the payout flow, so TDS and KYC ru
 1 no-reason/zero-grant answers never mark "posted" (pending, retry same key). 2 commission to Moneypenny needs server switch MNP_COMMISSION_ENABLED=1 (off in v1); owner route POST /v1/admin/suite/postings/:seq/release returns a definitely rejected claim to the ledger. 3 erase refused until Monopoly confirms removal. 4 Moneypenny suspend is recorded as no_remote_suspend (no remote call exists). Minors: redirect:'error', hashed convert idem key. 130/130 tests. Needs two independent clean audits on the exact SHA.
 
 ## Update 21 Nov 2026: cloud audits (2 FAILs) fixed
-Audit 1 (money): H1 payout request/approve re-check inside the atomic builder; H2 payout `sent_at`/`attempts` (migration 0005) set before the provider call, reject/fail/cancel refuse a maybe-sent payout; M1 claim lease; M2 concurrent approve; M3 refunded-sent claims listed in suite status. Audit 2 (security): H1 engines only asked for a verified e-mail; M1-M6, M8, M9 and M7 as in `docs/OWNER-DECISIONS.md` and `docs/PRIVACY.md`. Tests: 147. Version 1.0.0 added (version.json, CHANGELOG, KNOWLEDGE.md, footer line).
+Audit 1 (money): H1 payout request/approve re-check inside the atomic builder; H2 payout `sent_at`/`attempts` (migration 0005) set before the provider call, reject/fail/cancel refuse a maybe-sent payout; M1 claim lease; M2 concurrent approve; M3 refunded-sent claims listed in suite status. Audit 2 (security): H1 engines only asked for a verified e-mail; M1-M6, M8, M9 and M7 as in `docs/OWNER-DECISIONS.md` and `docs/PRIVACY.md`. Tests: see `npm test` (the count changes with every release). Version 1.0.0 added (version.json, CHANGELOG, KNOWLEDGE.md, footer line).

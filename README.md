@@ -69,7 +69,7 @@ is the one switch that makes the RazorpayX adapter real; it needs the owner's ow
 ## Layout
 
 ```
-migrations/   0001_init.sql, 0002_payout_items_schemes.sql      (D1 / SQLite)
+migrations/   0001_init.sql ... 0005_payout_sent.sql      (D1 / SQLite)
 src/          app.js (router) auth.js users.js links.js prospects.js sales.js payouts.js razorpay.js schemes.js
               chain.js (hash-chained ledger + audit)  policy.js  adapters.js (payout + mail)  db.js (D1 / sqlite)
 functions/    [[path]].js   Cloudflare Pages Function entry

@@ -1,6 +1,6 @@
 # Partner Circle: privacy notice (version 2026-11-21)
 
-Plain-language notice shown (in short form) at sign-up. The owner must fill the grievance contact before real partners join.
+Plain-language notice shown (in short form) at sign-up. The same text is served at /privacy.html. The owner must fill the grievance contact (in both places) before real partners join.
 
 - **What we keep:** name, e-mail, mobile number, role, sales and commissions, and payout details (UPI id or bank account, PAN), encrypted.
 - **Why:** to run your account, attribute sales, pay you, and meet tax rules.

@@ -127,7 +127,7 @@
     var q = (location.hash.split('sponsor=')[1] || '').replace(/[^a-z0-9]/gi, ''); if (q) sponsor.value = q;
     return E('div', null, E('h1', null, 'Join Partner Circle'),
       card(field('I want to join as', role), field('Full name', name), field('E-mail', email), field('Mobile number', phone), field('Sponsor code (if someone invited you)', sponsor),
-        E('p', { class: 'mut' }, 'We keep your name, e-mail and mobile number to run your account, track your sales and pay you. We share your name and e-mail with Moneypenny and Corporate Monopoly so you do not need a second login, and payout details (kept encrypted) with Razorpay when you are paid. You can see your data, rotate your key or ask for erasure from your account. Questions: the grievance contact in the privacy note.'),
+        E('p', { class: 'mut' }, 'We keep your name, e-mail and mobile number to run your account, track your sales and pay you. We share your name and e-mail with Moneypenny and Corporate Monopoly so you do not need a second login, and payout details (kept encrypted) with Razorpay when you are paid. You can see your data, rotate your key or ask for erasure from your account. Read the full privacy notice at /privacy.html.'),
         E('label', null, agree, ' I have read this and agree'),
         E('button', { class: 'btn', on: { click: function () {
           if (!agree.checked) { toast('Please tick the box to continue.', true); return; }
@@ -282,6 +282,11 @@
             return api('PUT', '/v1/me/kyc', india ? { pan: pan.value, upi_id: upi.value } : { tax_id: tax.value, bank_account: acct.value, bank_ifsc_swift: ifsc.value, bank_name: bank.value });
           }, 'Details submitted for checking') } }, 'Submit for checking'),
           me.email_verified ? null : E('p', { class: 'mut' }, 'Verify your e-mail first.')),
+        card(E('b', null, 'Your data and privacy'), E('p', { class: 'mut' }, 'See what we hold about you, rotate your key if you think it leaked, or ask for erasure. Read the privacy notice at /privacy.html.'),
+          E('p', null,
+            E('button', { class: 'btn ghost', on: { click: act(function () { return api('GET', '/v1/me/export').then(function (d) { var a = E('a', { href: URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })), download: 'my-partner-circle-data.json' }); document.body.appendChild(a); a.click(); a.remove(); }); }, 'Your data was downloaded') } }, 'Download my data'), ' ',
+            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/me/keys/rotate').then(function (r) { state.key = r.api_key; try { (localStorage.getItem(KEYSTORE) ? localStorage : sessionStorage).setItem(KEYSTORE, r.api_key); } catch (e) { /* storage unavailable */ } window.prompt('Your NEW key (copy it now, the old one no longer works):', r.api_key); }); }, 'Key rotated') } }, 'Rotate my key'), ' ',
+            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/me/erase-request'); }, 'Erasure requested; the owner will contact you') } }, 'Ask for erasure'))),
         card(E('b', null, 'Invite someone to your team'), E('p', { class: 'mut' }, 'Share this sponsor code; they enter it when registering:'), E('div', { class: 'code' }, me.handle), E('p', { class: 'mut' }, 'or ' + location.origin + '/#/register?sponsor=' + me.handle)));
     });
   };

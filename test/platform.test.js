@@ -74,7 +74,7 @@ test('Pages Function fails closed when secrets are missing (never runs with an e
   const { raw, db } = openDb();
   await seedSites(db);
   const env = { DB: fakeD1(raw) }; // no secrets at all
-  const res = await onRequest({ request: new Request('https://pc.test/v1/register', { method: 'POST', body: JSON.stringify({ role: 'partner', name: 'Zed', email: 'zed@example.test', phone: '9876543210' }) }), env });
+  const res = await onRequest({ request: new Request('https://pc.test/v1/register', { method: 'POST', body: JSON.stringify({ consent: true, role: 'partner', name: 'Zed', email: 'zed@example.test', phone: '9876543210' }) }), env });
   assert.equal(res.status, 500);
   assert.equal((await res.json()).error.code, 'server_misconfigured');
   assert.equal((await db.first('SELECT COUNT(*) AS n FROM users')).n, 0);

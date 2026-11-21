@@ -161,7 +161,7 @@ test('sec M6: the leaderboard names only you, shows no handles; the owner queue 
   const lb = (await h.call('GET', '/v1/leaderboard', { key: other.key })).data.month;
   assert.ok(lb.length >= 1);
   for (const r of lb) { assert.equal(r.handle, undefined); assert.equal(r.first_name, null); }
-  const reg = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543211', sponsor: boss.handle } });
+  const reg = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543211', sponsor: boss.handle } });
   assert.equal(reg.status, 201);
   const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
   assert.equal(q.partners.find((x) => x.name === 'Newbie').sponsor.handle, boss.handle);
@@ -188,4 +188,98 @@ test('sec M7: sign-up records consent and the notice version; a person can expor
   assert.equal((await h.call('POST', '/v1/me/erase-request', { key: k })).data.requested, true);
   const log = await h.ctx.db.all("SELECT action FROM audit_log WHERE action IN ('user.consent','user.erase_requested')");
   assert.equal(log.length, 2);
+});
+
+// ------------------------------------------------------------------ cloud audit round 2 on 536133b (refund/claim race, markFailed race)
+async function pendingPayout(h, name) {
+  const p = await twoSales(h, name);
+  const po = (await h.call('POST', '/v1/me/payouts', { key: p.key })).data;
+  return { p, po };
+}
+import { auditStmts } from '../src/chain.js';
+/** Another isolate approves and hands the payout to the provider (marker + audit entry) without going through this process's gate. */
+const sneakSend = async (h, poId) => {
+  await h.ctx.db.batch([
+    { sql: "UPDATE payouts SET status='approved', sent_at=?, attempts=1 WHERE id=?", params: [h.ctx.now(), poId] },
+    ...(await auditStmts(h.ctx, [{ action: 'payout.approve', target: `payout:${poId}`, meta: { other_isolate: true } }])),
+  ]);
+};
+/** Run `fire` once, after the statements are built and just before the first batch that would cancel a waiting payout (the stale-read window). */
+function afterCancelRead(h, fire) {
+  const orig = h.ctx.db.batch.bind(h.ctx.db);
+  let done = false;
+  h.ctx.db.batch = async (stmts) => {
+    if (!done && stmts.some((x) => /DELETE FROM payout_items/.test(x.sql))) { done = true; await fire(); }
+    return orig(stmts);
+  };
+  return () => { h.ctx.db.batch = orig; };
+}
+const noRelease = async (h, p, poId) => {
+  assert.ok((await h.ctx.db.first('SELECT sent_at FROM payouts WHERE id=?', [poId])).sent_at, 'the payout was sent');
+  assert.ok((await h.ctx.db.first('SELECT COUNT(*) AS n FROM payout_items WHERE payout_id=?', [poId])).n > 0, 'sent payout keeps its items');
+  assert.equal(await h.ctx.db.first("SELECT 1 AS x FROM ledger WHERE kind='payout_release' AND payout_id=?", [poId]), null, 'no release for a sent payout');
+  assert.equal((await h.ctx.db.first('SELECT status FROM payouts WHERE id=?', [poId])).status, 'approved');
+};
+
+test('H1 (round 2): a refund that races an approve does not release the sent payout', async () => {
+  const h = await mk();
+  const { p, po } = await pendingPayout(h, 'Rae');
+  const restore = afterCancelRead(h, () => sneakSend(h, po.id));
+  const r = await h.signed('mom', 'POST', '/v1/integration/refunds', { order_id: 'Rae-B' });
+  restore();
+  assert.equal(r.status, 200);
+  assert.equal(r.data.refund_after_payout, true, 'flagged for the owner instead');
+  await noRelease(h, p, po.id);
+});
+
+test('H1 (round 2): a claim that races an approve does not release the sent payout', async () => {
+  const h = await mk();
+  const { p, po } = await pendingPayout(h, 'Dee');
+  const restore = afterCancelRead(h, () => sneakSend(h, po.id));
+  const sale = await h.ctx.db.first("SELECT * FROM sales WHERE order_id='Dee-B'");
+  const { setDispute } = await import('../src/sales.js');
+  await setDispute(h.ctx, sale, 'open', 'claim');
+  restore();
+  await noRelease(h, p, po.id);
+});
+
+test('M1 (round 2): mark-failed does not release a payout that was sent after its first read', async () => {
+  const h = await mk();
+  const { po } = await pendingPayout(h, 'Moe');
+  await h.ctx.db.run("UPDATE payouts SET status='approved' WHERE id=?", [po.id]);
+  const orig = h.ctx.db.first.bind(h.ctx.db);
+  let done = false;
+  h.ctx.db.first = async (sql, params) => {
+    const row = await orig(sql, params);
+    if (!done && /SELECT \* FROM payouts WHERE id=\?/.test(sql)) { done = true; await sneakSend(h, po.id); }
+    return row;
+  };
+  const f = await h.call('POST', `/v1/admin/payouts/${po.id}/mark-failed`, { key: h.owner });
+  h.ctx.db.first = orig;
+  assert.equal(f.status, 409);
+  assert.equal(f.data.error.code, 'maybe_sent');
+  assert.equal(await h.ctx.db.first("SELECT 1 AS x FROM ledger WHERE kind='payout_release' AND payout_id=?", [po.id]), null);
+});
+
+test('L1 (round 2): the owner queue flags a pending payout that holds a refunded sale', async () => {
+  const h = await mk();
+  const { po } = await pendingPayout(h, 'Lou');
+  await h.ctx.db.run("UPDATE sales SET status='refunded' WHERE order_id='Lou-B'");
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
+  assert.equal(q.payouts.find((x) => x.id === po.id).flagged_refunds, 1);
+});
+
+test('sec round 2: held and fresh prospect replies look the same; rotate is never idempotency-stored; consent is required; erase requests reach the queue', async () => {
+  const h = await mk();
+  const a = await h.staff('partner', 'Ann'); const b = await h.staff('partner', 'Bob');
+  const fresh = (await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: 'x1@example.test' } })).data;
+  const held = (await h.call('POST', '/v1/me/prospects', { key: b.key, body: { site_id: 'mom', customer_email: 'x1@example.test' } })).data;
+  assert.deepEqual(Object.keys(fresh).sort(), Object.keys(held).sort());
+  const rot = await h.call('POST', '/v1/me/keys/rotate', { key: a.key, headers: { 'idempotency-key': 'k1' } });
+  assert.equal(rot.status, 200);
+  assert.equal(await h.ctx.db.first("SELECT 1 AS x FROM idempotency WHERE body LIKE '%' || ? || '%'", [rot.data.api_key]), null, 'new key is not stored in clear');
+  assert.equal((await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'No', email: 'no@example.test', phone: '9876543299' } })).data.error.code, 'consent_required');
+  await h.call('POST', '/v1/me/erase-request', { key: rot.data.api_key });
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
+  assert.equal(q.erase_requests.length, 1);
 });

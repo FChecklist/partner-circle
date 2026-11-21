@@ -26,7 +26,7 @@ test('deal registration: a registered prospect is protected from a later click b
   assert.equal(reg.data.protected_until, h.clock.t + 14 * DAY);
   const dup = await h.call('POST', '/v1/me/prospects', { key: b.key, body: { site_id: 'mom', customer_email: 'prospect@example.test' } });
   assert.equal(dup.data.error, undefined, 'no leak: a held e-mail is answered like a fresh one');
-  assert.equal(dup.data.id, null, 'but nothing was registered for the second partner');
+  assert.equal((await h.ctx.db.first("SELECT COUNT(*) AS n FROM leads WHERE user_id=? AND source='registered'", [b.id])).n, 0, 'but nothing was registered for the second partner');
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: 'prospect@example.test' } })).data.already_yours, true);
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: a.email } })).data.error.code, 'self_referral');
   const ckB = await click(h, b);
@@ -39,7 +39,7 @@ test('deal registration: a registered prospect is protected from a later click b
   assert.equal(s2.data.attribution, 'click');
   assert.equal(s2.data.partner_handle, b.handle);
   assert.equal((await h.call('GET', '/v1/me/prospects', { key: a.key })).data.prospects.length, 1);
-  const r = (await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rita' } })).data;
+  const r = (await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rita' } })).data;
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: r.api_key, body: { site_id: 'mom', customer_email: 'x@example.test' } })).status, 403);
 });
 

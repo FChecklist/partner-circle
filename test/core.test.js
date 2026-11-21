@@ -81,7 +81,7 @@ test('AI key can never hold or use owner-only scopes', async () => {
 
 test('user keys cannot reach admin routes; admin keys cannot reach /me', async () => {
   const h = await mk();
-  const r = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rita' } });
+  const r = await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rita' } });
   assert.equal(r.status, 201);
   assert.equal((await h.call('GET', '/v1/admin/queue', { key: r.data.api_key })).status, 403);
   assert.equal((await h.call('GET', '/v1/me', { key: h.owner })).status, 403);
@@ -138,7 +138,7 @@ test('Idempotency-Key replays the stored answer and rejects a different body; ke
   assert.equal(c.status, 422);
   assert.equal(c.data.error.code, 'idempotency_conflict');
   // responses that carry a login key must never be stored in the idempotency table
-  await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Ira' }, headers: { 'idempotency-key': 'k-2' } });
+  await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Ira' }, headers: { 'idempotency-key': 'k-2' } });
   await h.call('POST', '/v1/admin/keys', { key: h.owner, body: { kind: 'ai' }, headers: { 'idempotency-key': 'k-3' } });
   const stored = JSON.stringify(await h.db.all('SELECT * FROM idempotency'));
   assert.ok(!stored.includes('pck_'), 'no API key may sit in the idempotency table');

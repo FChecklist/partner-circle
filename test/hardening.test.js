@@ -41,7 +41,7 @@ const saleId = async (h, order) => (await h.db.first('SELECT id FROM sales WHERE
 test('BLOCKER: public register ignores status, parent_id and every other extra field; the partner starts pending and cannot earn', async () => {
   const h = await mk();
   const boss = await h.staff('manager', 'Bossy');
-  const r = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Sly', email: 'sly@example.test', phone: '9876500001', status: 'active', parent_id: boss.id, email_verified: 1, id: 'u_forced' } });
+  const r = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Sly', email: 'sly@example.test', phone: '9876500001', status: 'active', parent_id: boss.id, email_verified: 1, id: 'u_forced' } });
   assert.equal(r.status, 201);
   assert.equal(r.data.user.status, 'pending');
   assert.equal(r.data.user.parent_id, null);
@@ -52,7 +52,7 @@ test('BLOCKER: public register ignores status, parent_id and every other extra f
   assert.equal((await h.call('POST', '/v1/me/links', { key: r.data.api_key, body: { site_id: 'mom', path: '/' } })).status, 403, 'a pending partner cannot make links');
   assert.equal((await h.call('POST', '/v1/me/codes', { key: r.data.api_key, body: { site_id: 'mom', discount_bps: 500 } })).status, 403);
   // the refer role stays instantly active, but still cannot pick a status or a sponsor chain
-  const f = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Ref', status: 'suspended', parent_id: boss.id } });
+  const f = await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Ref', status: 'suspended', parent_id: boss.id } });
   assert.equal(f.data.user.status, 'active');
   assert.equal(f.data.user.parent_id, null);
   // a body that is not an object is a clean 422
@@ -153,7 +153,7 @@ test('foreign partner: the owner can read the frozen bank destination (logged) t
   assert.equal(dest.destination.bank_ifsc_swift, 'BARCGB22');
   assert.equal((await auditActions(h, 'payout.destination_revealed')).length, 1);
   // the transfer did not go through: the owner releases it from the console and the money is back
-  const fail = await h.call('POST', `/v1/admin/payouts/${po.id}/mark-failed`, { key: h.owner, body: { reason: 'bank rejected' } });
+  const fail = await h.call('POST', `/v1/admin/payouts/${po.id}/mark-failed`, { key: h.owner, body: { reason: 'bank rejected', confirmed_not_sent: true } });
   assert.equal(fail.data.status, 'failed');
   assert.equal((await bal(h, p)).available_minor, 150000);
   assert.equal((await h.call('POST', `/v1/admin/payouts/${po.id}/mark-failed`, { key: h.ai })).status, 403);
@@ -369,7 +369,7 @@ test('key issue, revoke and secret rotation are audited in the SAME atomic batch
 
 test('key issuance for people is audited (self-registration and owner-created staff)', async () => {
   const h = await mk();
-  await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rina' } });
+  await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rina' } });
   await h.staff('partner', 'Sam');
   const rows = await auditActions(h, 'key.issue');
   assert.equal(rows.length, 2);
@@ -505,7 +505,7 @@ test('without a configured mailer a verification request says so (503) instead o
   assert.equal((await h.call('POST', `/v1/admin/users/${p.id}/verify-email`, { key: h.owner })).data.email_verified, true);
   assert.equal((await auditActions(h, 'user.email_verified_by_owner')).length, 1);
   assert.equal((await h.call('PUT', '/v1/me/kyc', { key: p.key, body: { pan: 'ABCDE1234F', upi_id: 'mail@okbank' } })).status, 200);
-  const ref = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'NoMail' } });
+  const ref = await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'NoMail' } });
   assert.equal((await h.call('POST', `/v1/admin/users/${ref.data.user.id}/verify-email`, { key: h.owner })).status, 422);
   assert.equal(unconfiguredMailer().send.length, 0);
 });
@@ -525,7 +525,7 @@ test('e-mail code attempts cannot exceed the cap even with parallel guesses', as
 
 test('approvals and payout outcomes are e-mailed to partners with a verified address', async () => {
   const h = await mk();
-  const r = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Nora', email: 'nora@example.test', phone: '9876500777' } });
+  const r = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Nora', email: 'nora@example.test', phone: '9876500777' } });
   const key = r.data.api_key;
   await h.call('POST', '/v1/me/email/send-code', { key });
   await h.call('POST', '/v1/me/email/verify', { key, body: { code: h.mailer.outbox.at(-1)._code } });
@@ -622,8 +622,8 @@ test('requests never share an acting identity: the base context is untouched by 
   // concurrent owner and public requests keep their own attribution
   await Promise.all([
     h.call('PUT', '/v1/admin/policy', { key: h.owner, body: { min_payout_minor: 6000 } }),
-    h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Conc1' } }),
-    h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Conc2' } }),
+    h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Conc1' } }),
+    h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Conc2' } }),
   ]);
   const regs = await h.db.all("SELECT actor_type, actor_id FROM audit_log WHERE action='user.create'");
   assert.ok(regs.every((r) => r.actor_type === 'system' && r.actor_id === null), 'public sign-ups are never attributed to the concurrent owner call');

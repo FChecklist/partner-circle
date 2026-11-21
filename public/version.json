@@ -1,0 +1,14 @@
+{
+  "product": "Partner Circle",
+  "version": "1.0.0",
+  "releasedAt": "2026-11-21T05:30:47Z",
+  "releasedAtIST": "21 Nov 2026 11:00 IST",
+  "commit": "31c7c4a4f98e234f2a7dc571359367a20741ae92",
+  "changes": [
+    "Front door for the Moneypenny / Corporate Monopoly / Partner Circle suite: one dashboard, signed provisioning, degraded mode",
+    "Commission hooks to Moneypenny built but OFF in v1 (server switch MNP_COMMISSION_ENABLED, ledger-only)",
+    "Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes",
+    "Fixes from five independent audit passes (no double pay, refund after send, erase waits for Monopoly)",
+    "Version number and version notes added (this change)"
+  ]
+}

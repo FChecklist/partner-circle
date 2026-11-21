@@ -237,7 +237,7 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
   const mnp = ctx.engines.mnp;
   const out = { claimed: 0, posted: 0, retry: 0, rejected: 0 };
   if (!mnp || !prof.mnp_enabled) return { ...out, skipped: 'moneypenny_off' };
-  if (prof.commission_dest === 'moneypenny') {
+  if (prof.commission_dest === 'moneypenny' && ctx.env.MNP_COMMISSION_ENABLED === '1') { // the v1 switch is checked at claim time too
     const rows = await ctx.db.all(`SELECT l.seq, l.account_id, l.kind, l.amount_minor, l.ref, l.eligible_at, s.razorpay_payment_id AS pid ${MATURED} ${userId ? 'AND l.account_id=?' : ''} ORDER BY l.seq LIMIT ?`,
       userId ? [ctx.now(), userId, limit] : [ctx.now(), limit]);
     for (const r of rows) {
@@ -313,7 +313,7 @@ export async function requeuePosting(ctx, seq) {
   if (!p) throw new HttpError(404, 'not_found', 'posting not found');
   if (!['rejected', 'dead'].includes(p.state)) throw new HttpError(409, 'bad_state', `a ${p.state} posting cannot be requeued`);
   await atomic(ctx, async () => [
-    { sql: "UPDATE mp_postings SET state='pending', attempts=0, next_try_at=0 WHERE ledger_seq=? AND state IN ('rejected','dead')", params: [seq] },
+    { sql: "UPDATE mp_postings SET state='pending', next_try_at=0 WHERE ledger_seq=? AND state IN ('rejected','dead')", params: [seq] },
     ...(await auditStmts(ctx, [{ action: 'moneypenny.requeue', target: `ledger:${seq}`, meta: { was: p.state, reason: p.last_error } }])),
   ]);
   return ctx.db.first('SELECT * FROM mp_postings WHERE ledger_seq=?', [seq]);

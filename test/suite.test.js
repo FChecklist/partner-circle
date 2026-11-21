@@ -386,3 +386,20 @@ test('audit 3: release is refused when it cannot prove no credit exists (sale_al
   await h.ctx.db.run("UPDATE sales SET status='refunded' WHERE id=(SELECT sale_id FROM ledger WHERE seq=?)", [row.ledger_seq]);
   assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'sale_not_recorded');
 });
+
+test('audit 4: requeue never resets attempts, so a possibly-credited (dead) claim cannot become releasable; no claiming without the v1 switch', async () => {
+  const h = await withEngines();
+  await earner(h, 'Req');
+  await setDest(h, 'moneypenny');
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  const row = await h.ctx.db.first('SELECT * FROM mp_postings');
+  await h.ctx.db.run("UPDATE mp_postings SET state='dead', granted_credits=NULL, attempts=8 WHERE ledger_seq=?", [row.ledger_seq]);
+  await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/requeue`, { key: h.owner });
+  assert.equal((await h.ctx.db.first('SELECT attempts FROM mp_postings')).attempts, 8);
+  await h.ctx.db.run("UPDATE mp_postings SET state='rejected', last_error='no_rule' WHERE ledger_seq=?", [row.ledger_seq]);
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'manual_review');
+  const off = await withEngines({ env: {} });
+  await earner(off, 'Off');
+  await off.ctx.db.run("UPDATE tenant_profile SET commission_dest='moneypenny'");
+  assert.equal((await off.call('POST', '/v1/admin/suite/sweep', { key: off.owner })).data.claimed, 0);
+});

@@ -36,7 +36,7 @@ only in the dev server. The dev server uses a mock payout provider and a mock ma
 ## Tests
 
 ```
-npm test            # node --test "test/*.test.js"  (no dependencies; 108 tests)
+npm test            # node --test "test/*.test.js"  (no dependencies; run it for the current count)
 npm run build       # syntax-checks every JS file, replays migrations on an empty DB, seeds the sites
 ```
 

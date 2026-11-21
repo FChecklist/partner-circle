@@ -283,3 +283,13 @@ test('sec round 2: held and fresh prospect replies look the same; rotate is neve
   const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
   assert.equal(q.erase_requests.length, 1);
 });
+
+test('sec round 3: 60 repeat erase requests from one person write one row and do not hide another person from the owner queue', async () => {
+  const h = await mk();
+  const a = await h.staff('partner', 'Spam'); const b = await h.staff('partner', 'Victim');
+  await h.call('POST', '/v1/me/erase-request', { key: b.key });
+  for (let i = 0; i < 60; i++) await h.call('POST', '/v1/me/erase-request', { key: a.key });
+  assert.equal((await h.ctx.db.first("SELECT COUNT(*) AS n FROM audit_log WHERE action='user.erase_requested'")).n, 2);
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data.erase_requests;
+  assert.deepEqual(q.map((x) => x.user_id).sort(), [a.id, b.id].sort());
+});

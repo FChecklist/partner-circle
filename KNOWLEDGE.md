@@ -1,7 +1,7 @@
 # Partner Circle: knowledge file
 
 ## Version
-- Current version: **1.0.1** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
+- Current version: **1.0.2** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
 - Rule (owner order, 21 Nov 2026): every product, site and page update carries a version number and version notes, saved in git. Bump `package.json`, `public/version.json` and add a `CHANGELOG.md` entry for every release.
 
 ## Where things are

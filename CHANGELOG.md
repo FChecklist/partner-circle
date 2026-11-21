@@ -2,6 +2,10 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.2 - 21 Nov 2026
+- Erasure requests: asking again no longer writes a new record, and the owner queue lists each person once, so one person cannot push others' requests out of the owner's view.
+- Docs: README test count no longer hard-coded; the privacy-page grievance contact is a launch gate (do not invite Indian partners until the owner fills it).
+
 ## 1.0.1 - 21 Nov 2026
 - Money fix: a refund or a claim that arrives at the same moment the owner approves a payout can no longer give that payout's money back to the partner (the check is now made again inside the same step that writes the change). Marking a payout as failed has the same re-check, and a payout already handed over (also one paid by hand) needs the owner to confirm with the provider first.
 - The owner queue now flags a waiting payout that contains a refunded sale, and lists people who asked to be erased.

@@ -9,3 +9,6 @@ These are business rules the owner set earlier. They were NOT changed by the bui
 5. **Erasure at Moneypenny / Monopoly (audit 2 M7).** Needs delete calls in those products.
 6. **Mail.** Real partners need mail (RESEND_API_KEY) configured; the owner can no longer vouch for an e-mail without it (`ALLOW_OWNER_VOUCH=1` is the emergency override).
 7. **Lows not done:** site signature does not cover method and path; KYC key has no KDF; verification code is 6 digits with a resettable counter; `email_taken` reveals registered e-mails; `constructor` key 500 on admin PATCH; bad `%` in a URL returns 500; leaked site key can set leads; AI keys can suspend users; no HSTS header; chain not anchored outside D1.
+
+## Launch gate (must be done by the owner before inviting Indian partners)
+- Fill the grievance contact (name and a business e-mail) in `public/privacy.html` and `docs/PRIVACY.md`. It is a placeholder today. Nobody else may invent it.

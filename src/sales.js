@@ -6,7 +6,7 @@
 // Money only becomes payable once Razorpay has confirmed the same payment (rzp_status = 'confirmed'), the sale is not refunded and
 // no claim/chargeback is open on it. One Razorpay payment id belongs to exactly one sale.
 
-import { HttpError, newId, needStr, isInt, DAY } from './util.js';
+import { HttpError, newId, needStr, isInt, DAY, normEmail } from './util.js';
 import { atomic, auditStmts, ledgerStmts } from './chain.js';
 import { getPolicy, holdDays } from './policy.js';
 import { RANK, uplineOf } from './users.js';
@@ -53,7 +53,7 @@ async function attribute(ctx, site, body, customerHash, paidAt, policy) {
   // 2. a prospect a partner registered, protected for deal_protection_days (beats a later click by someone else)
   if (customerHash) {
     const pr = await ctx.db.first("SELECT * FROM leads WHERE site_id=? AND customer_hash=? AND source='registered'", [site.id, customerHash]);
-    if (pr && paidAt >= pr.ts && paidAt - pr.ts <= policy.deal_protection_days * DAY) return { user_id: pr.user_id, attribution: 'prospect' };
+    if (pr && paidAt >= pr.ts && paidAt - pr.ts <= policy.deal_protection_days * DAY) return { user_id: pr.user_id, attribution: 'prospect' }; // owner rule: deal protection beats a later click (limits: 50 prospects per partner, uniform replies)
   }
   // 3. click id from the embed snippet
   if (body.click_id) {
@@ -99,7 +99,8 @@ export async function recordSale(ctx, site, body) {
   let blockReason = null;
   if (user) {
     const samePhone = user.phone && body.customer_phone && lastDigits(user.phone).length >= 8 && lastDigits(user.phone) === lastDigits(body.customer_phone);
-    if ((user.email_hash && customerHash && user.email_hash === customerHash) || samePhone) { status = 'blocked'; blockReason = 'self_referral'; }
+    const sameMailbox = user.email && body.customer_email && (await ctx.pepper(normEmail(user.email))) === (await ctx.pepper(normEmail(body.customer_email)));
+    if ((user.email_hash && customerHash && user.email_hash === customerHash) || samePhone || sameMailbox) { status = 'blocked'; blockReason = 'self_referral'; }
     else if (user.status !== 'active') { status = 'blocked'; blockReason = 'partner_not_active'; }
   }
 

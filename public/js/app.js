@@ -123,11 +123,15 @@
     var role = E('select', { id: 'role' }, E('option', { value: 'partner' }, 'Growth Partner (e-mail and mobile needed)'), E('option', { value: 'refer' }, 'Refer and Earn (just a name to start)'));
     var name = E('input', { id: 'n' }), email = E('input', { id: 'e', type: 'email' }), phone = E('input', { id: 'p', inputmode: 'tel' }), sponsor = E('input', { id: 's', placeholder: 'optional' });
     var out = E('div');
+    var agree = E('input', { id: 'agree', type: 'checkbox' });
     var q = (location.hash.split('sponsor=')[1] || '').replace(/[^a-z0-9]/gi, ''); if (q) sponsor.value = q;
     return E('div', null, E('h1', null, 'Join Partner Circle'),
       card(field('I want to join as', role), field('Full name', name), field('E-mail', email), field('Mobile number', phone), field('Sponsor code (if someone invited you)', sponsor),
+        E('p', { class: 'mut' }, 'We keep your name, e-mail and mobile number to run your account, track your sales and pay you. We share your name and e-mail with Moneypenny and Corporate Monopoly so you do not need a second login, and payout details (kept encrypted) with Razorpay when you are paid. You can see your data, rotate your key or ask for erasure from your account. Questions: the grievance contact in the privacy note.'),
+        E('label', null, agree, ' I have read this and agree'),
         E('button', { class: 'btn', on: { click: function () {
-          var body = { role: role.value, name: name.value, email: email.value || undefined, phone: phone.value || undefined, sponsor: sponsor.value || undefined };
+          if (!agree.checked) { toast('Please tick the box to continue.', true); return; }
+          var body = { consent: true, role: role.value, name: name.value, email: email.value || undefined, phone: phone.value || undefined, sponsor: sponsor.value || undefined };
           api('POST', '/v1/register', body).then(function (r) {
             out.textContent = '';
             out.appendChild(card(E('b', null, 'You are in. Save your key now.'), E('p', { class: 'mut' }, 'This is your login. It is shown only once.'), E('div', { class: 'code' }, r.api_key),
@@ -234,7 +238,7 @@
           table(['Code', 'Off', 'Used', 'Expires', ''], codes.map(function (c) { return [E('span', { class: 'code' }, c.code), (c.discount_bps / 100) + '%', c.used_count + ' / ' + c.max_uses, day(c.expires_at),
             c.active ? E('button', { class: 'btn ghost', on: { click: act(function () { return api('DELETE', '/v1/me/codes/' + c.code); }, 'Code switched off') } }, 'Switch off') : pill('off', 'o')]; })));
         var ps = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name); })), pe = E('input', { type: 'email', placeholder: 'their e-mail' });
-        nodes.push(E('h2', null, 'Register a prospect'), card(E('p', { class: 'mut' }, 'Tell us who you are working with. You are protected for 14 days against other partners links. Their e-mail is stored only as a one-way code.'),
+        nodes.push(E('h2', null, 'Register a prospect'), card(E('p', { class: 'mut' }, 'Tell us who you are working with. You are protected for 14 days against other partners links. Their e-mail is stored only as a one-way code; a note you add is stored as you type it, so keep personal details out of it.'),
           field('Product', ps), field('Prospect e-mail', pe),
           E('button', { class: 'btn alt', on: { click: act(function () { return api('POST', '/v1/me/prospects', { site_id: ps.value, customer_email: pe.value }); }, 'Prospect registered') } }, 'Register')),
           table(['Product', 'Registered'], prospects.map(function (x) { return [x.site_id, day(x.registered_at)]; })));

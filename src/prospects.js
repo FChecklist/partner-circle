@@ -2,7 +2,9 @@
 // A partner tells us "I am working with this person". The prospect is protected for policy.deal_protection_days against
 // other partners' clicks, and is the lead that a later sale (even with no click id) is attributed to.
 
-import { HttpError, newId, needStr, DAY } from './util.js';
+import { HttpError, newId, needStr, DAY, normEmail } from './util.js';
+
+const MAX_PROSPECTS = 50; // per partner: a harvested e-mail list cannot be registered wholesale
 import { atomic, auditStmts } from './chain.js';
 import { getPolicy } from './policy.js';
 
@@ -13,22 +15,27 @@ export async function registerProspect(ctx, user, body) {
   if (!site) throw new HttpError(404, 'site_not_found', 'unknown or inactive site');
   const email = needStr(body.customer_email, 'customer_email', 254);
   const hash = await ctx.pepper(email);
-  if (user.email_hash && user.email_hash === hash) throw new HttpError(422, 'self_referral', 'you cannot register yourself');
+  if ((user.email_hash && user.email_hash === hash) || (user.email && (await ctx.pepper(normEmail(user.email))) === (await ctx.pepper(normEmail(email))))) throw new HttpError(422, 'self_referral', 'you cannot register yourself');
+  if ((await ctx.db.first("SELECT COUNT(*) AS n FROM leads WHERE user_id=? AND source='registered'", [user.id])).n >= MAX_PROSPECTS) {
+    throw new HttpError(429, 'prospect_limit', `you can hold up to ${MAX_PROSPECTS} registered prospects; they expire after the protection period`);
+  }
   const policy = await getPolicy(ctx);
   const existing = await ctx.db.first('SELECT * FROM leads WHERE site_id=? AND customer_hash=?', [site.id, hash]);
   if (existing) {
     if (existing.user_id === user.id) return { id: existing.id, site_id: site.id, already_yours: true, registered_at: existing.ts };
-    throw new HttpError(409, 'already_claimed', 'another partner already has this prospect');
+    return heldElsewhere(site, ctx); // same answer as a fresh registration: no one can probe who holds an e-mail
   }
   const id = newId('ld');
   const r = await ctx.db.run(
     "INSERT OR IGNORE INTO leads (id,site_id,user_id,source,click_id,code,customer_hash,lead_ref,ts) VALUES (?,?,?,'registered',NULL,NULL,?,?,?)",
     [id, site.id, user.id, hash, body.note ? String(body.note).slice(0, 100) : null, ctx.now()],
   );
-  if (r.changes !== 1) throw new HttpError(409, 'already_claimed', 'another partner already has this prospect');
+  if (r.changes !== 1) return heldElsewhere(site, ctx);
   await atomic(ctx, () => auditStmts(ctx, [{ action: 'prospect.register', target: `lead:${id}`, meta: { site_id: site.id } }]));
   return { id, site_id: site.id, registered_at: ctx.now(), protected_until: ctx.now() + policy.deal_protection_days * DAY };
 }
+
+const heldElsewhere = (site, ctx) => ({ id: null, site_id: site.id, registered_at: ctx.now(), note: 'received; protection applies only if nobody registered this person earlier' });
 
 export async function listProspects(ctx, userId) {
   return ctx.db.all("SELECT id, site_id, ts AS registered_at, lead_ref AS note FROM leads WHERE user_id=? AND source='registered' ORDER BY ts DESC LIMIT 100", [userId]);

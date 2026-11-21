@@ -73,6 +73,6 @@ export async function settleScheme(ctx, id) {
 
 export async function leaderboard(ctx, sinceMs, limit = 10) {
   return ctx.db.all(
-    `SELECT u.handle, u.name, u.role, COUNT(*) AS sales, SUM(s.net_minor) AS net_minor FROM sales s JOIN users u ON u.id = s.user_id
+    `SELECT u.id AS user_id, u.name, u.role, COUNT(*) AS sales, SUM(s.net_minor) AS net_minor FROM sales s JOIN users u ON u.id = s.user_id
       WHERE s.status='recorded' AND s.paid_at >= ? GROUP BY s.user_id ORDER BY net_minor DESC LIMIT ?`, [sinceMs, limit]);
 }

@@ -183,6 +183,8 @@ export async function ownerVerifyEmail(ctx, userId) {
   if (!u) throw new HttpError(404, 'not_found', 'user not found');
   if (!u.email) throw new HttpError(422, 'no_email', 'this person has no e-mail on file');
   if (u.email_verified) return publicUser(u);
+  // The code sent to the address is the proof of ownership. Without working mail the owner could only guess, and this e-mail is the person's identity at Moneypenny.
+  if (ctx.mailer?.configured === false && ctx.env.ALLOW_OWNER_VOUCH !== '1') throw new HttpError(409, 'mail_not_configured', 'e-mail cannot be vouched for without proof; configure mail (RESEND_API_KEY) so the person can verify with a code');
   await atomic(ctx, async () => [
     { sql: 'UPDATE users SET email_verified=1 WHERE id=?', params: [userId] },
     { sql: 'DELETE FROM email_codes WHERE user_id=?', params: [userId] },
@@ -252,6 +254,7 @@ export async function submitKyc(ctx, user, body) {
     },
     ...(await auditStmts(ctx, [{ action: 'kyc.submit', target: `user:${user.id}` }])),
   ]);
+  await notify(ctx, user.id, 'Your payout details were changed', 'New payout details were submitted on your Partner Circle account. If this was not you, reply to this e-mail straight away and rotate your key.');
   return kycView(ctx, user.id);
 }
 

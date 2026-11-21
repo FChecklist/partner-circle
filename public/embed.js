@@ -12,6 +12,7 @@
     try { return w.localStorage.getItem(n) || ''; } catch (e) { return ''; }
   }
   try {
+    if (w.top !== w.self) throw 0; // framed (for example a hidden iframe on another site): never store attribution
     var q = new URL(w.location.href).searchParams;
     var c = q.get('pc'), k = q.get('pcode');
     if (c && /^ck_[0-9a-f]{16}$/.test(c)) setC(CK, c);

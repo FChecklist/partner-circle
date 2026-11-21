@@ -1,6 +1,6 @@
 // Personal links, discount codes, click tracking and lead capture.
 
-import { HttpError, newId, randSlug, needStr, isInt, hostIsOwned, DAY } from './util.js';
+import { HttpError, newId, randSlug, needStr, isInt, hostIsOwned, DAY, normEmail } from './util.js';
 import { atomic, auditStmts } from './chain.js';
 import { getPolicy } from './policy.js';
 
@@ -153,10 +153,11 @@ export async function recordLead(ctx, site, body) {
     if (c && ctx.now() - c.ts <= windowMs) { userId = c.user_id; source = 'click'; clickId = c.id; }
   }
   if (!userId) return { recorded: false, attributed: false };
-  const u = await ctx.db.first('SELECT email_hash, phone, status FROM users WHERE id=?', [userId]);
+  const u = await ctx.db.first('SELECT email, email_hash, phone, status FROM users WHERE id=?', [userId]);
   const lastDigits = (v) => String(v || '').replace(/\D/g, '').slice(-10);
   const samePhone = u.phone && body.customer_phone && lastDigits(u.phone).length >= 8 && lastDigits(u.phone) === lastDigits(body.customer_phone);
-  if ((u.email_hash && u.email_hash === customerHash) || samePhone) {
+  const sameMailbox = u.email && body.customer_email && (await ctx.pepper(normEmail(u.email))) === (await ctx.pepper(normEmail(body.customer_email)));
+  if ((u.email_hash && u.email_hash === customerHash) || samePhone || sameMailbox) {
     await atomic(ctx, () => auditStmts({ ...ctx, actor: { type: 'site', id: site.id } }, [{ action: 'lead.blocked', target: `user:${userId}`, meta: { reason: 'self_referral', site_id: site.id } }]));
     return { recorded: false, attributed: false, blocked: 'self_referral' };
   }

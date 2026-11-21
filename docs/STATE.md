@@ -32,3 +32,6 @@ Note for v2: money going via Moneypenny skips the payout flow, so TDS and KYC ru
 
 ## Update: audit pass 2 = FAIL (4 majors) fixed
 1 no-reason/zero-grant answers never mark "posted" (pending, retry same key). 2 commission to Moneypenny needs server switch MNP_COMMISSION_ENABLED=1 (off in v1); owner route POST /v1/admin/suite/postings/:seq/release returns a definitely rejected claim to the ledger. 3 erase refused until Monopoly confirms removal. 4 Moneypenny suspend is recorded as no_remote_suspend (no remote call exists). Minors: redirect:'error', hashed convert idem key. 130/130 tests. Needs two independent clean audits on the exact SHA.
+
+## Update 21 Nov 2026: cloud audits (2 FAILs) fixed
+Audit 1 (money): H1 payout request/approve re-check inside the atomic builder; H2 payout `sent_at`/`attempts` (migration 0005) set before the provider call, reject/fail/cancel refuse a maybe-sent payout; M1 claim lease; M2 concurrent approve; M3 refunded-sent claims listed in suite status. Audit 2 (security): H1 engines only asked for a verified e-mail; M1-M6, M8, M9 and M7 as in `docs/OWNER-DECISIONS.md` and `docs/PRIVACY.md`. Tests: 147. Version 1.0.0 added (version.json, CHANGELOG, KNOWLEDGE.md, footer line).

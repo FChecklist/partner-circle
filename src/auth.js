@@ -50,8 +50,13 @@ export async function revokeKey(ctx, id, { audit } = {}) {
   else await ctx.db.run(stmt.sql, stmt.params);
 }
 
+const mem = new Map(); // per-isolate counters: a flood past the limit is refused here without touching the database (free-tier write budget)
 export async function rateLimit(ctx, bucket, limit, windowMs = 60000) {
   const win = Math.floor(ctx.now() / windowMs);
+  const m = mem.get(bucket);
+  if (m && m.win === win && m.n >= limit) throw new HttpError(429, 'rate_limited', 'too many requests, slow down', { retry_after_s: Math.ceil(((win + 1) * windowMs - ctx.now()) / 1000) });
+  if (mem.size > 5000) mem.clear();
+  mem.set(bucket, { win, n: m && m.win === win ? m.n + 1 : 1 });
   const r = await ctx.db.first(
     'INSERT INTO rate_limits (bucket,win,n,ts) VALUES (?,?,1,?) ON CONFLICT(bucket) DO UPDATE SET n = CASE WHEN win = excluded.win THEN n + 1 ELSE 1 END, win = excluded.win, ts = excluded.ts RETURNING n',
     [bucket, win, ctx.now()],
@@ -74,7 +79,7 @@ export async function authenticate(ctx, req) {
   const ok = key && !key.revoked_at && timingSafeEqualStr(key.hash, await sha256Hex(secret));
   if (!ok) throw new HttpError(401, 'invalid_key', 'API key is invalid or revoked');
   await rateLimit(ctx, `key:${key.id}`, key.rate_per_min);
-  await ctx.db.run('UPDATE api_keys SET last_used_at=? WHERE id=?', [ctx.now(), key.id]);
+  if (!key.last_used_at || ctx.now() - key.last_used_at > 600000) await ctx.db.run('UPDATE api_keys SET last_used_at=? WHERE id=?', [ctx.now(), key.id]); // at most one write per 10 minutes
   const actor = { type: key.kind, keyId: key.id, id: key.user_id || key.site_id || null, scopes: JSON.parse(key.scopes) };
   if (key.kind === 'user') {
     const user = await ctx.db.first('SELECT * FROM users WHERE id=?', [key.user_id]);

@@ -107,3 +107,85 @@ test('M2: two concurrent approvals call the provider once', async () => {
   assert.equal(calls.length, 1, 'provider called once');
   assert.deepEqual([a.status, b.status].sort(), [200, 409]);
 });
+
+// ------------------------------------------------------------------ cloud audit round 1, angle 2 (security / privacy / abuse)
+import { unconfiguredMailer } from '../src/adapters.js';
+import { normEmail } from '../src/util.js';
+
+test('sec M1: a partner cannot register more than 50 prospects', async () => {
+  const h = await mk();
+  const p = await h.staff('partner', 'Many');
+  for (let i = 0; i < 50; i++) assert.equal((await h.call('POST', '/v1/me/prospects', { key: p.key, body: { site_id: 'mom', customer_email: `c${i}@example.test` } })).status < 300, true);
+  assert.equal((await h.call('POST', '/v1/me/prospects', { key: p.key, body: { site_id: 'mom', customer_email: 'c51@example.test' } })).data.error.code, 'prospect_limit');
+});
+
+test('sec M2: a self-purchase with an e-mail alias (+tag, dots on Gmail) is blocked as self-referral', async () => {
+  assert.equal(normEmail('J.Ane+shop@GoogleMail.com'), 'jane@gmail.com');
+  const h = await mk();
+  const p = await h.staff('partner', 'Gma');
+  const ck = await click(h, p);
+  const r = await h.sale('mom', { order_id: 'alias1', click_id: ck, amount_minor: 1000000, customer_email: 'gma+shop@example.test' });
+  assert.equal(r.data.status, 'blocked');
+});
+
+test('sec M4: a user can rotate their own key (old key dies); changing payout details notifies them and flags the owner queue', async () => {
+  const h = await mk();
+  const p = await h.staff('partner', 'Rota');
+  await h.verifyUser(p);
+  const rot = await h.call('POST', '/v1/me/keys/rotate', { key: p.key });
+  assert.equal(rot.status, 200);
+  assert.equal((await h.call('GET', '/v1/me', { key: p.key })).status, 401, 'old key no longer works');
+  assert.equal((await h.call('GET', '/v1/me', { key: rot.data.api_key })).status, 200);
+  const before = h.mailer.outbox.length;
+  await h.call('PUT', '/v1/me/kyc', { key: rot.data.api_key, body: { pan: 'ABCDE1234F', upi_id: 'thief@okbank' } });
+  assert.ok(h.mailer.outbox.length > before, 'the partner is told');
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
+  assert.equal(q.kyc[0].payout_details_changed, true);
+});
+
+test('sec M5: the owner cannot vouch for an e-mail when mail is not configured (no proof)', async () => {
+  const h = await mk();
+  const p = await h.staff('partner', 'Vouch');
+  h.ctx.mailer = unconfiguredMailer();
+  assert.equal((await h.call('POST', `/v1/admin/users/${p.id}/verify-email`, { key: h.owner })).data.error.code, 'mail_not_configured');
+});
+
+test('sec M6: the leaderboard names only you, shows no handles; the owner queue shows the sponsor', async () => {
+  const h = await mk();
+  const boss = await h.staff('exec', 'Boss');
+  const p = await h.staff('partner', 'Pia');
+  await h.verifyUser(p);
+  const ck = await click(h, p);
+  await h.sale('mom', { order_id: 'lb1', click_id: ck, amount_minor: 1000000 });
+  const other = await h.staff('partner', 'Zed');
+  const lb = (await h.call('GET', '/v1/leaderboard', { key: other.key })).data.month;
+  assert.ok(lb.length >= 1);
+  for (const r of lb) { assert.equal(r.handle, undefined); assert.equal(r.first_name, null); }
+  const reg = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543211', sponsor: boss.handle } });
+  assert.equal(reg.status, 201);
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
+  assert.equal(q.partners.find((x) => x.name === 'Newbie').sponsor.handle, boss.handle);
+});
+
+test('sec M8: key use is written at most once per 10 minutes; a flood past the limit is refused without more writes', async () => {
+  const h = await mk();
+  const p = await h.staff('partner', 'Busy');
+  await h.call('GET', '/v1/me', { key: p.key });
+  const t1 = (await h.ctx.db.first('SELECT last_used_at AS t FROM api_keys WHERE user_id=?', [p.id])).t;
+  h.advance(1000);
+  await h.call('GET', '/v1/me', { key: p.key });
+  assert.equal((await h.ctx.db.first('SELECT last_used_at AS t FROM api_keys WHERE user_id=?', [p.id])).t, t1);
+});
+
+test('sec M7: sign-up records consent and the notice version; a person can export their data and ask for erasure', async () => {
+  const h = await mk();
+  const reg = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Dpdp', email: 'dpdp@example.test', phone: '9876543212' } });
+  assert.equal(reg.status, 201);
+  const k = reg.data.api_key;
+  const ex = await h.call('GET', '/v1/me/export', { key: k });
+  assert.equal(ex.status, 200);
+  assert.ok(ex.data.shared_with.length >= 2 && ex.data.notice_version);
+  assert.equal((await h.call('POST', '/v1/me/erase-request', { key: k })).data.requested, true);
+  const log = await h.ctx.db.all("SELECT action FROM audit_log WHERE action IN ('user.consent','user.erase_requested')");
+  assert.equal(log.length, 2);
+});

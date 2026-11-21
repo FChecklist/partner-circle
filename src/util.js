@@ -81,6 +81,18 @@ export function needStr(v, name, max = 200) {
 
 export const DAY = 86400000;
 
+/** Same mailbox, however it is typed: lower case, "+tag" dropped, dots dropped for Gmail. Used only to catch self-referral aliases. */
+export function normEmail(e) {
+  const v = String(e || '').trim().toLowerCase();
+  const at = v.lastIndexOf('@');
+  if (at < 1) return v;
+  let local = v.slice(0, at).split('+')[0];
+  let host = v.slice(at + 1);
+  if (host === 'googlemail.com') host = 'gmail.com';
+  if (host === 'gmail.com') local = local.replace(/\./g, '');
+  return `${local}@${host}`;
+}
+
 export function aesKey(secret) {
   return sha256Bytes(secret).then((b) => crypto.subtle.importKey('raw', b, 'AES-GCM', false, ['encrypt', 'decrypt']));
 }

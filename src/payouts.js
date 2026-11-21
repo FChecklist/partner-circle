@@ -258,9 +258,10 @@ export async function listPayouts(ctx, userId) {
 export async function approvalQueue(ctx) {
   const policy = await getPolicy(ctx);
   const partners = await ctx.db.all("SELECT * FROM users WHERE status='pending' ORDER BY created_at");
-  const kycRows = await ctx.db.all("SELECT k.user_id, k.country, k.submitted_at, u.name, u.handle FROM user_kyc k JOIN users u ON u.id = k.user_id WHERE k.status='submitted' ORDER BY k.submitted_at");
+  const kycRows = await ctx.db.all("SELECT k.user_id, k.country, k.submitted_at, u.name, u.handle, (SELECT COUNT(*) FROM audit_log a WHERE a.action='kyc.verified' AND a.target = 'user:' || k.user_id) AS verified_before FROM user_kyc k JOIN users u ON u.id = k.user_id WHERE k.status='submitted' ORDER BY k.submitted_at");
   const kyc = [];
-  for (const k of kycRows) kyc.push({ ...k, details: await kycReviewView(ctx, k.user_id) });
+  // payout_details_changed: this person's details were verified before and have been replaced since: confirm with them before approving (a stolen key looks the same)
+  for (const k of kycRows) kyc.push({ ...k, payout_details_changed: k.verified_before > 0, details: await kycReviewView(ctx, k.user_id) });
   const payouts = await ctx.db.all(
     `SELECT p.*, u.name, u.handle,
         (SELECT COUNT(*) FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq JOIN sales s ON s.id = l.sale_id
@@ -270,7 +271,10 @@ export async function approvalQueue(ctx) {
     `SELECT s.id, s.site_id, s.order_id, s.net_minor, s.disputed_at, s.dispute_note, u.name FROM sales s LEFT JOIN users u ON u.id = s.user_id
       WHERE s.dispute_status = 'open' ORDER BY s.disputed_at`);
   return {
-    partners: partners.map((u) => ({ id: u.id, role: u.role, name: u.name, handle: u.handle, country: u.country, created_at: u.created_at })),
+    partners: await Promise.all(partners.map(async (u) => {
+      const sp = u.parent_id ? await ctx.db.first('SELECT name, handle FROM users WHERE id=?', [u.parent_id]) : null;
+      return { id: u.id, role: u.role, name: u.name, handle: u.handle, country: u.country, created_at: u.created_at, sponsor: sp ? { name: sp.name, handle: sp.handle } : null };
+    })),
     kyc,
     payouts: payouts.map((p) => ({ ...payoutView(p), name: p.name, handle: p.handle, flagged_refunds: p.flagged_refunds })),
     claims,

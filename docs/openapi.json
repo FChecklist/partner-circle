@@ -759,6 +759,81 @@
         }
       }
     },
+    "/v1/me/export": {
+      "get": {
+        "operationId": "get_v1_me_export",
+        "summary": "GET /v1/me/export",
+        "x-rw": "read",
+        "x-money": false,
+        "x-auth": "user",
+        "x-scope": null,
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused. Money and credits only move on a person's decision; an AI may prepare a proposal, never approve."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-rate-limit": "per key (default 120/min)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "default": {
+            "description": "error: { error: { code, message } }"
+          }
+        }
+      }
+    },
+    "/v1/me/erase-request": {
+      "post": {
+        "operationId": "post_v1_me_erase_request",
+        "summary": "POST /v1/me/erase-request",
+        "x-rw": "write",
+        "x-money": false,
+        "x-auth": "user",
+        "x-scope": null,
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused. Money and credits only move on a person's decision; an AI may prepare a proposal, never approve."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-rate-limit": "per key (default 120/min)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "default": {
+            "description": "error: { error: { code, message } }"
+          }
+        }
+      }
+    },
+    "/v1/me/keys/rotate": {
+      "post": {
+        "operationId": "post_v1_me_keys_rotate",
+        "summary": "POST /v1/me/keys/rotate",
+        "x-rw": "write",
+        "x-money": false,
+        "x-auth": "user",
+        "x-scope": null,
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused. Money and credits only move on a person's decision; an AI may prepare a proposal, never approve."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-rate-limit": "per key (default 120/min)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "default": {
+            "description": "error: { error: { code, message } }"
+          }
+        }
+      }
+    },
     "/v1/leaderboard": {
       "get": {
         "operationId": "get_v1_leaderboard",

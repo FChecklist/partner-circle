@@ -9,6 +9,7 @@
     "Commission hooks to Moneypenny built but OFF in v1 (server switch MNP_COMMISSION_ENABLED, ledger-only)",
     "Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes",
     "Fixes from five independent audit passes (no double pay, refund after send, erase waits for Monopoly)",
-    "Version number and version notes added (this change)"
+    "Version number and version notes added (this change)",
+    "Cloud audit round 1 fixes: payout request and approve re-checked atomically, payout sent marker, verified e-mail only for engine lookups, key rotation, privacy notice and export, anonymous leaderboard"
   ]
 }

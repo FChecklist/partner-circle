@@ -24,7 +24,9 @@ test('deal registration: a registered prospect is protected from a later click b
   const reg = await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: 'Prospect@Example.test' } });
   assert.equal(reg.status, 201);
   assert.equal(reg.data.protected_until, h.clock.t + 14 * DAY);
-  assert.equal((await h.call('POST', '/v1/me/prospects', { key: b.key, body: { site_id: 'mom', customer_email: 'prospect@example.test' } })).data.error.code, 'already_claimed');
+  const dup = await h.call('POST', '/v1/me/prospects', { key: b.key, body: { site_id: 'mom', customer_email: 'prospect@example.test' } });
+  assert.equal(dup.data.error, undefined, 'no leak: a held e-mail is answered like a fresh one');
+  assert.equal(dup.data.id, null, 'but nothing was registered for the second partner');
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: 'prospect@example.test' } })).data.already_yours, true);
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: a.key, body: { site_id: 'mom', customer_email: a.email } })).data.error.code, 'self_referral');
   const ckB = await click(h, b);

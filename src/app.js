@@ -11,6 +11,8 @@ import * as P from './payouts.js';
 import * as SC from './schemes.js';
 import * as PR from './prospects.js';
 import * as SU from './suite.js';
+
+const PRIVACY_NOTICE_VERSION = '2026-11-21';
 import { handleRazorpayWebhook } from './razorpay.js';
 import { purgeExpired } from './retention.js';
 
@@ -31,7 +33,12 @@ route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx })
     .map((s) => ({ ...s, refund_terms: s.refund_terms || defaultRefundTerms(s) })));
 
 // (idem:false: the response holds a login key, which must never be cached)
-route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => [201, await U.register(ctx, body)]);
+route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => {
+  const out = await U.register(ctx, body);
+  // DPDP: the sign-up form shows the privacy notice and the person ticks it; the consent and the notice version are recorded in the audit log
+  if (body?.consent === true) await audit({ ...ctx, actor: { type: 'user', id: out.user.id } }, 'user.consent', `user:${out.user.id}`, { notice_version: PRIVACY_NOTICE_VERSION });
+  return [201, out];
+});
 
 route('POST', '/v1/webhooks/razorpay', { auth: 'public', raw: true, idem: false }, async ({ ctx, req, rawBody }) => handleRazorpayWebhook(ctx, req, rawBody));
 
@@ -77,8 +84,33 @@ route('GET', '/v1/me/schemes', me, async ({ ctx, actor }) => {
   const live = await SC.listSchemes(ctx, true);
   return { schemes: await Promise.all(live.map((s) => SC.progressFor(ctx, s, actor.user.id))) };
 });
-route('GET', '/v1/leaderboard', me, async ({ ctx }) => ({
-  month: (await SC.leaderboard(ctx, ctx.now() - 30 * 86400000)).map((r) => ({ handle: r.handle, first_name: String(r.name || '').split(' ')[0], sales: r.sales, net_minor: r.net_minor })),
+// DPDP: a person can see what is held about them and ask for erasure (the owner completes it: money owed or an open payout must be settled first)
+route('GET', '/v1/me/export', me, async ({ ctx, actor }) => {
+  const u = actor.user;
+  return {
+    notice_version: PRIVACY_NOTICE_VERSION,
+    profile: U.publicUser(u),
+    kyc: await U.kycView(ctx, u.id), // masked
+    ledger: await ctx.db.all('SELECT seq, kind, amount_minor, eligible_at, ref, memo, ts AS created_at FROM ledger WHERE account_id=? ORDER BY seq', [u.id]),
+    payouts: await P.listPayouts(ctx, u.id),
+    prospects: await PR.listProspects(ctx, u.id),
+    shared_with: ['Moneypenny (name, e-mail)', 'Corporate Monopoly (name, e-mail, team)', 'Razorpay / RazorpayX (payout destination, at payout time)'],
+  };
+});
+route('POST', '/v1/me/erase-request', me, async ({ ctx, actor }) => {
+  await audit(ctx, 'user.erase_requested', `user:${actor.user.id}`, {});
+  return { requested: true, note: 'The owner completes erasure once money owed and any open payout are settled. Data held by Moneypenny and Corporate Monopoly is removed through those products.' };
+});
+route('POST', '/v1/me/keys/rotate', me, async ({ ctx, actor }) => {
+  // new key first, then the key used for this call is revoked: a stolen key can be cut off by its owner
+  const k = await createKey(ctx, { kind: 'user', user_id: actor.user.id, label: 'rotated by owner of the account', created_by: actor.keyId },
+    { audit: (nk) => [{ action: 'key.rotate', target: `key:${nk.id}`, meta: { replaces: actor.keyId, user_id: actor.user.id } }] });
+  await revokeKey(ctx, actor.keyId);
+  return { api_key: k.token, note: 'The old key no longer works. Store this one safely.' };
+});
+route('GET', '/v1/leaderboard', me, async ({ ctx, actor }) => ({
+  // Anonymous: other members' names and handles are not shown (privacy, and handles let anyone pick a sponsor to poach). Only your own row is named.
+  month: (await SC.leaderboard(ctx, ctx.now() - 30 * 86400000)).map((r, i) => ({ rank: i + 1, you: r.user_id === actor.user.id, first_name: r.user_id === actor.user.id ? String(r.name || '').split(' ')[0] : null, sales: r.sales, net_minor: r.net_minor })),
 }));
 
 route('GET', '/v1/me/summary', me, async ({ ctx, actor }) => {

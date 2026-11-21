@@ -7,5 +7,6 @@ Format: newest first. Every release also updates `public/version.json` (shown in
 - Commission to Moneypenny is built but OFF in v1 (`MNP_COMMISSION_ENABLED` server switch; commissions stay in the ledger and the owner-approved payout flow). Payouts are off by default (mock adapter).
 - Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes, audit log.
 - Hardened through five independent audit passes (no double pay, refund after send, release only when no credit can exist, erase waits for Monopoly).
+- Cloud audit round 1 fixes: payout request/approve re-checked inside the atomic step, payout sent marker before the provider call (no release of an unknown outcome), concurrent approve guard, Moneypenny claim lease, dashboard asks engines only for a verified e-mail, key rotation, payout-details-changed notice and flag, e-mail alias self-referral check, prospect cap and uniform replies, anonymous leaderboard, privacy notice with consent record, data export and erasure request, cheaper rate limiting.
 - Known limits: erase check not atomic with a concurrent claim; Moneypenny has no suspend call.
 - Version number, version notes (this file) and footer version line added.

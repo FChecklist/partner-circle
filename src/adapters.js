@@ -75,6 +75,7 @@ export function nullMailer() {
  */
 export function unconfiguredMailer() {
   return {
+    configured: false,
     async send() {
       throw new HttpError(503, 'mail_not_configured', 'e-mail sending is not set up yet; ask the owner to verify your address');
     },

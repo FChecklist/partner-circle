@@ -293,3 +293,16 @@ test('sec round 3: 60 repeat erase requests from one person write one row and do
   const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data.erase_requests;
   assert.deepEqual(q.map((x) => x.user_id).sort(), [a.id, b.id].sort());
 });
+
+test('sec round 4: 60 people asking for erasure all appear (oldest first) and 40 parallel calls from one person write one row', async () => {
+  const h = await mk();
+  const first = await h.staff('partner', 'First');
+  await h.call('POST', '/v1/me/erase-request', { key: first.key });
+  for (let i = 0; i < 55; i++) { const u = await h.staff('partner', `P${i}`); await h.call('POST', '/v1/me/erase-request', { key: u.key }); }
+  const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data.erase_requests;
+  assert.equal(q.length, 56);
+  assert.equal(q[0].user_id, first.id);
+  const par = await h.staff('partner', 'Par');
+  await Promise.all(Array.from({ length: 40 }, () => h.call('POST', '/v1/me/erase-request', { key: par.key })));
+  assert.equal((await h.ctx.db.first("SELECT COUNT(*) AS n FROM audit_log WHERE action='user.erase_requested' AND target=?", [`user:${par.id}`])).n, 1);
+});

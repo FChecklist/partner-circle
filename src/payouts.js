@@ -285,8 +285,8 @@ export async function approvalQueue(ctx) {
     kyc,
     payouts: payouts.map((p) => ({ ...payoutView(p), name: p.name, handle: p.handle, flagged_refunds: p.flagged_refunds })),
     claims,
-    // people who asked to be erased (the owner completes it once money owed and any open payout are settled)
-    erase_requests: await ctx.db.all("SELECT substr(a.target, 6) AS user_id, u.name, u.handle, MAX(a.ts) AS requested_at FROM audit_log a JOIN users u ON u.id = substr(a.target, 6) WHERE a.action='user.erase_requested' AND u.status <> 'erased' GROUP BY a.target ORDER BY requested_at DESC LIMIT 50"),
+    // people who asked to be erased, oldest first, never truncated (the owner completes it once money owed and any open payout are settled)
+    erase_requests: await ctx.db.all("SELECT substr(a.target, 6) AS user_id, u.name, u.handle, MAX(a.ts) AS requested_at FROM audit_log a JOIN users u ON u.id = substr(a.target, 6) WHERE a.action='user.erase_requested' AND u.status <> 'erased' GROUP BY a.target ORDER BY requested_at ASC, MIN(a.seq) ASC"),
     tds_confirmed: !!policy.tds_confirmed,
   };
 }

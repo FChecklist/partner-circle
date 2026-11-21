@@ -100,8 +100,11 @@ route('GET', '/v1/me/export', me, async ({ ctx, actor }) => {
 });
 route('POST', '/v1/me/erase-request', me, async ({ ctx, actor }) => {
   // one open request per person: repeat calls write nothing new (no flooding of the owner's queue or the audit log)
-  const open = await ctx.db.first("SELECT 1 AS x FROM audit_log WHERE action='user.erase_requested' AND target=?", [`user:${actor.user.id}`]);
-  if (!open) await audit(ctx, 'user.erase_requested', `user:${actor.user.id}`, {});
+  // check and write in one atomic step, so parallel calls cannot write more than one row
+  await atomic(ctx, async () => {
+    const open = await ctx.db.first("SELECT 1 AS x FROM audit_log WHERE action='user.erase_requested' AND target=?", [`user:${actor.user.id}`]);
+    return open ? [] : auditStmts(ctx, [{ action: 'user.erase_requested', target: `user:${actor.user.id}` }]);
+  });
   return { requested: true, note: 'The owner completes erasure once money owed and any open payout are settled. Data held by Moneypenny and Corporate Monopoly is removed through those products.' };
 });
 route('POST', '/v1/me/keys/rotate', { ...me, idem: false }, async ({ ctx, actor }) => {

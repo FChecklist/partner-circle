@@ -2,6 +2,9 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.3 - 21 Nov 2026
+- Erasure requests: the owner queue lists every request, oldest first (no cut-off), and the Approvals screen now shows them. Two requests at the same instant still write one record. New database index (migration 0006) keeps the lookups cheap.
+
 ## 1.0.2 - 21 Nov 2026
 - Erasure requests: asking again no longer writes a new record, and the owner queue lists each person once, so one person cannot push others' requests out of the owner's view.
 - Docs: README test count no longer hard-coded; the privacy-page grievance contact is a launch gate (do not invite Indian partners until the owner fills it).

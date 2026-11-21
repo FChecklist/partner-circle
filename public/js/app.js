@@ -334,6 +334,7 @@
         s.flagged_refunds || s.refunds_without_usage_proof ? E('div', { class: 'note' }, s.flagged_refunds + ' refund(s) came after the payout was sent (not clawed back). ' + s.refunds_without_usage_proof + ' refund(s) have no usage proof from the site.') : null,
         E('h2', null, 'People'), table(['Name', 'Role', 'Country', 'Added', ''], q.partners.map(function (u) { return [u.name, ROLE_NAME[u.role], u.country, day(u.created_at),
           ownerOnly(post('/v1/admin/users/' + u.id + '/approve', undefined, { label: 'Approve', done: 'Approved' }))]; })),
+        E('h2', null, 'Erasure requests (' + (q.erase_requests || []).length + ')'), (q.erase_requests || []).length ? table(['Name', 'Handle', 'Asked on'], q.erase_requests.map(function (e) { return [e.name, e.handle, day(e.requested_at)]; })) : E('p', { class: 'mut' }, 'None waiting.'),
         E('h2', null, 'Payout details to check'), table(['Name', 'Details', 'Submitted', ''], q.kyc.map(function (k) { return [k.name, kycCell(k), day(k.submitted_at),
           ownerOnly(E('span', null, post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: true }, { label: 'Verify', done: 'Verified' }), ' ',
             post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: false, note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' })))]; })),

@@ -170,12 +170,12 @@ export async function recordSale(ctx, site, body) {
 async function cancelWaitingPayouts(ctx, saleId, why) {
   const payouts = await ctx.db.all(
     `SELECT DISTINCT p.* FROM payouts p JOIN payout_items pi ON pi.payout_id = p.id JOIN ledger l ON l.seq = pi.ledger_seq
-      WHERE l.sale_id=? AND p.status IN ('pending_approval','approved')`, [saleId]);
+      WHERE l.sale_id=? AND (p.status='pending_approval' OR (p.status='approved' AND p.sent_at IS NULL))`, [saleId]);
   return {
     payouts,
     sql: payouts.flatMap((p) => [
       { sql: 'DELETE FROM payout_items WHERE payout_id=?', params: [p.id] },
-      { sql: "UPDATE payouts SET status='rejected', note=? WHERE id=? AND status IN ('pending_approval','approved')", params: [why, p.id] },
+      { sql: "UPDATE payouts SET status='rejected', note=? WHERE id=? AND (status='pending_approval' OR (status='approved' AND sent_at IS NULL))", params: [why, p.id] },
     ]),
     ledger: payouts.map((p) => ({ account_id: p.user_id, kind: 'payout_release', amount_minor: p.gross_minor, payout_id: p.id, eligible_at: ctx.now(), ref: `release:${p.id}`, memo: why })),
   };
@@ -195,7 +195,7 @@ export async function applyRefund(ctx, sale, meta = {}) {
   const sent = new Set(
     (await ctx.db.all(
       `SELECT pi.ledger_seq FROM payout_items pi JOIN payouts p ON p.id = pi.payout_id
-        WHERE p.status IN ('processing','paid') AND pi.ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)`, [sale.id])).map((r) => r.ledger_seq));
+        WHERE (p.status IN ('processing','paid') OR (p.status='approved' AND p.sent_at IS NOT NULL)) AND pi.ledger_seq IN (SELECT seq FROM ledger WHERE sale_id=?)`, [sale.id])).map((r) => r.ledger_seq));
   const cancel = await cancelWaitingPayouts(ctx, sale.id, 'a sale in this payout was refunded');
   // Entries handed to Moneypenny: if Moneypenny was never contacted (still pending, 0 attempts) take the claim back and void normally;
   // otherwise the credit may exist there, so treat it like a payout already sent: no clawback, flag it for the owner.

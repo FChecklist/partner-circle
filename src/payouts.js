@@ -83,7 +83,13 @@ export async function requestPayout(ctx, user) {
   const snapshot = india ? { upi_id: kyc.upi_id } : { bank_account: kyc.bank_account, bank_ifsc_swift: kyc.bank_ifsc_swift, bank_name: kyc.bank_name };
   const destEnc = await encryptField(ctx.secret('KYC_KEY'), JSON.stringify({ ...snapshot, name: user.name }));
   try {
-    await atomic(ctx, async () => [
+    await atomic(ctx, async () => {
+      // re-select inside the builder: a refund / claim / hold that landed since the read above changes the set, and the request is refused (never built from a stale list)
+      const now = await availableEntries(ctx, user.id);
+      if (now.length !== entries.length || now.some((e, i) => e.seq !== entries[i].seq || e.amount_minor !== entries[i].amount_minor)) {
+        throw new HttpError(409, 'balance_changed', 'your balance changed while the request was being made; check it and ask again');
+      }
+      return [
       {
         sql: `INSERT INTO payouts (id,user_id,gross_minor,tds_bps,tds_minor,net_minor,status,requested_by_key,method,destination_masked,dest_enc,created_at)
               VALUES (?,?,?,?,?,?, 'pending_approval', ?,?,?,?,?)`,
@@ -92,7 +98,8 @@ export async function requestPayout(ctx, user) {
       ...entries.map((e) => ({ sql: 'INSERT INTO payout_items (ledger_seq,payout_id,amount_minor) VALUES (?,?,?)', params: [e.seq, id, e.amount_minor] })),
       ...(await ledgerStmts(ctx, [{ account_id: user.id, kind: 'payout_reserve', amount_minor: -gross, payout_id: id, eligible_at: ctx.now(), ref: `reserve:${id}`, memo: 'payout requested' }])),
       ...(await auditStmts(ctx, [{ action: 'payout.request', target: `payout:${id}`, meta: { gross_minor: gross, tds_minor: tds, items: entries.length } }])),
-    ]);
+      ];
+    });
   } catch (e) {
     if (/one_open_payout|UNIQUE constraint failed: (payouts\.user_id|payout_items)/.test(String(e.message))) throw new HttpError(409, 'payout_open', 'a payout is already in progress');
     if (/already posted to Moneypenny/.test(String(e.message))) throw new HttpError(409, 'balance_changed', 'part of your balance just moved to Moneypenny; check your balance and ask again');
@@ -135,11 +142,17 @@ async function releaseStmts(ctx, p, why) {
 export async function rejectPayout(ctx, id, note) {
   const p = await getPayout(ctx, id);
   if (!['pending_approval', 'approved'].includes(p.status)) throw new HttpError(409, 'bad_state', `a ${p.status} payout cannot be rejected`);
-  await atomic(ctx, async () => [
-    { sql: "UPDATE payouts SET status='rejected', note=? WHERE id=? AND status IN ('pending_approval','approved')", params: [note || null, id] },
-    ...(await releaseStmts(ctx, p, 'payout rejected')),
-    ...(await auditStmts(ctx, [{ action: 'payout.reject', target: `payout:${id}`, meta: { note: note || null } }])),
-  ]);
+  await atomic(ctx, async () => {
+    const cur = await ctx.db.first('SELECT status, sent_at FROM payouts WHERE id=?', [id]);
+    if (!cur || !['pending_approval', 'approved'].includes(cur.status)) throw new HttpError(409, 'bad_state', 'the payout changed; reload it');
+    // the provider may have been contacted (sent_at): the outcome is unknown, so it can never be rejected as "not sent"
+    if (cur.sent_at != null) throw new HttpError(409, 'maybe_sent', 'the provider may already have paid this; check there, then mark it paid or failed');
+    return [
+      { sql: "UPDATE payouts SET status='rejected', note=? WHERE id=? AND status IN ('pending_approval','approved') AND sent_at IS NULL", params: [note || null, id] },
+      ...(await releaseStmts(ctx, p, 'payout rejected')),
+      ...(await auditStmts(ctx, [{ action: 'payout.reject', target: `payout:${id}`, meta: { note: note || null } }])),
+    ];
+  });
   await notify(ctx, p.user_id, 'Your payout request was not approved', 'Your payout request was not approved this time. The money is back in your balance.');
   return payoutView(await getPayout(ctx, id));
 }
@@ -150,10 +163,18 @@ export async function approvePayout(ctx, id, { execute = true } = {}) {
   if (p.status !== 'pending_approval') throw new HttpError(409, 'bad_state', `payout is ${p.status}, not pending_approval`);
   const kyc = await ctx.db.first('SELECT status FROM user_kyc WHERE user_id=?', [p.user_id]);
   if (kyc?.status !== 'verified') throw new HttpError(409, 'kyc_required', 'KYC is no longer verified for this partner');
-  await atomic(ctx, async () => [
-    { sql: "UPDATE payouts SET status='approved', approved_by_key=?, approved_at=? WHERE id=? AND status='pending_approval'", params: [ctx.actor.keyId, ctx.now(), id] },
-    ...(await auditStmts(ctx, [{ action: 'payout.approve', target: `payout:${id}`, meta: { gross_minor: p.gross_minor, net_minor: p.net_minor } }])),
-  ]);
+  await atomic(ctx, async () => {
+    // re-checked inside the builder: a concurrent approve, or a sale refunded / put on hold since the request, stops this one
+    const cur = await ctx.db.first('SELECT status FROM payouts WHERE id=?', [id]);
+    if (!cur || cur.status !== 'pending_approval') throw new HttpError(409, 'bad_state', 'the payout is no longer waiting for approval');
+    const bad = await ctx.db.first(`SELECT 1 AS x FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq LEFT JOIN sales s ON s.id = l.sale_id
+       WHERE pi.payout_id=? AND l.kind IN ('commission','override') AND (s.status <> 'recorded' OR COALESCE(s.dispute_status,'') = 'open') LIMIT 1`, [id]);
+    if (bad) throw new HttpError(409, 'sale_changed', 'a sale in this payout was refunded or put on hold; reject the payout');
+    return [
+      { sql: "UPDATE payouts SET status='approved', approved_by_key=?, approved_at=? WHERE id=? AND status='pending_approval'", params: [ctx.actor.keyId, ctx.now(), id] },
+      ...(await auditStmts(ctx, [{ action: 'payout.approve', target: `payout:${id}`, meta: { gross_minor: p.gross_minor, net_minor: p.net_minor } }])),
+    ];
+  });
   return execute ? executePayout(ctx, id) : payoutView(await getPayout(ctx, id));
 }
 
@@ -171,12 +192,21 @@ export async function executePayout(ctx, id) {
   }
   if (!p.dest_enc) throw new HttpError(409, 'no_destination', 'this payout has no stored destination');
   const destination = JSON.parse(await decryptField(ctx.secret('KYC_KEY'), p.dest_enc));
+  // Mark "the provider may now have been contacted" BEFORE the call (compare-and-set on attempts: a concurrent execute loses and stops).
+  await atomic(ctx, async () => {
+    const cur = await ctx.db.first('SELECT status, attempts FROM payouts WHERE id=?', [id]);
+    if (!cur || cur.status !== 'approved' || cur.attempts !== p.attempts) throw new HttpError(409, 'bad_state', 'another request is already executing this payout');
+    return [
+      { sql: "UPDATE payouts SET sent_at=COALESCE(sent_at, ?), attempts=attempts+1 WHERE id=? AND status='approved'", params: [ctx.now(), id] },
+      ...(await auditStmts(ctx, [{ action: 'payout.sending', target: `payout:${id}`, meta: { attempt: p.attempts + 1 } }])),
+    ];
+  });
   let res;
   try {
     res = await ctx.payouts.createPayout({ payout_id: p.id, amount_minor: p.net_minor, method: p.method, destination, name: user.name });
   } catch (e) {
     await atomic(ctx, () => auditStmts(ctx, [{ action: 'payout.execute_failed', target: `payout:${id}`, meta: { error: String(e.message).slice(0, 200) } }]));
-    throw e instanceof HttpError ? e : new HttpError(502, 'provider_error', 'the payout provider call failed; the payout stays approved and can be retried');
+    throw e instanceof HttpError ? e : new HttpError(502, 'provider_error', 'the payout provider call failed; the outcome is unknown, so the payout stays approved (retry with the same id, or reconcile with the provider)');
   }
   await atomic(ctx, async () => [
     { sql: "UPDATE payouts SET status='processing', provider=?, provider_ref=?, provider_mode=? WHERE id=? AND status='approved'", params: [res.provider, res.provider_ref, res.mode || ctx.payouts.mode || null, id] },
@@ -203,12 +233,14 @@ export async function markPaid(ctx, id, utr) {
  * already marked 'paid' (the provider reversed it afterwards): status goes to 'failed' with reversed_at set, the reserve is released,
  * and the original paid_ref / paid_at stay on the row as history.
  */
-export async function markFailed(ctx, id, reason, { reversal = false } = {}) {
+export async function markFailed(ctx, id, reason, { reversal = false, definitive = false } = {}) {
   const p = await getPayout(ctx, id);
   if (p.status === 'failed') return payoutView(p);
   const allowed = reversal ? ['approved', 'processing', 'paid'] : ['approved', 'processing'];
   if (!allowed.includes(p.status)) throw new HttpError(409, 'bad_state', `a ${p.status} payout cannot be marked failed`);
   const wasPaid = p.status === 'paid';
+  // A payout the provider may have been contacted about is only released on a DEFINITE answer (provider webhook failed/reversed, or the owner confirmed with the provider that nothing was sent).
+  if (p.sent_at != null && !reversal && !definitive) throw new HttpError(409, 'maybe_sent', 'the provider may have paid this; confirm with the provider that nothing was sent, then mark it failed with confirmed_not_sent');
   await atomic(ctx, async () => [
     { sql: `UPDATE payouts SET status='failed', note=?, reversed_at=? WHERE id=? AND status IN (${allowed.map((s) => `'${s}'`).join(',')})`, params: [reason || null, wasPaid ? ctx.now() : null, id] },
     ...(await releaseStmts(ctx, p, wasPaid ? 'payout reversed by the provider' : 'payout failed')),

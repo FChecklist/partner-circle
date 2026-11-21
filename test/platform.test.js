@@ -82,7 +82,7 @@ test('Pages Function fails closed when secrets are missing (never runs with an e
 
 test('migrations: apply cleanly to an empty database, in order, once; tables and append-only triggers exist', () => {
   const files = migrationFiles();
-  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql', '0003_hardening.sql', '0004_suite.sql']);
+  assert.deepEqual(files.map((f) => f.name), ['0001_init.sql', '0002_payout_items_schemes.sql', '0003_hardening.sql', '0004_suite.sql', '0005_payout_sent.sql']);
   const raw = new DatabaseSync(':memory:');
   for (const f of files) raw.exec(f.sql);
   const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
@@ -93,7 +93,7 @@ test('migrations: apply cleanly to an empty database, in order, once; tables and
   assert.deepEqual(triggers, ['audit_no_delete', 'audit_no_update', 'ledger_no_delete', 'ledger_no_update', 'mp_posting_not_in_payout', 'payout_item_not_in_mp']);
   // re-opening an already-migrated file database does not re-run migrations
   const again = openDb();
-  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 4);
+  assert.ok(again.raw.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n === 5);
 });
 
 test('schema constraints: one open payout per user, unique order per site, sales amounts and roles checked by the database itself', async () => {

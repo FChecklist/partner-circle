@@ -310,7 +310,7 @@ route('POST', '/v1/admin/payouts/:id/mark-paid', adm('payouts.approve'), async (
   if (p && p.provider !== 'manual') throw new HttpError(409, 'not_manual', 'only manually-paid payouts are recorded by hand; provider payouts settle through the provider webhook');
   return P.markPaid(ctx, params.id, needStr(body?.reference, 'reference', 80));
 });
-route('POST', '/v1/admin/payouts/:id/mark-failed', adm('payouts.approve'), async ({ ctx, params, body }) => P.markFailed(ctx, params.id, body?.reason ? String(body.reason).slice(0, 200) : 'marked failed by owner'));
+route('POST', '/v1/admin/payouts/:id/mark-failed', adm('payouts.approve'), async ({ ctx, params, body }) => P.markFailed(ctx, params.id, body?.reason ? String(body.reason).slice(0, 200) : 'marked failed by owner', { definitive: body?.confirmed_not_sent === true }));
 route('GET', '/v1/admin/payouts/:id/destination', adm('payouts.approve'), async ({ ctx, params }) => P.revealPayoutDestination(ctx, params.id)); // owner only, audited
 route('POST', '/v1/admin/payouts/:id/mock-settle', adm('payouts.approve'), async ({ ctx, params }) => {
   if (ctx.payouts.mode !== 'mock') throw new HttpError(403, 'not_mock', 'mock settlement exists only in mock payout mode');

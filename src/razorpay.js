@@ -94,7 +94,7 @@ async function processEvent(ctx, actx, { type, pay, ref, po, disp, result }) {
         } else await markPaid(actx, payout.id, po.utr || po.id);
       } else if (type === 'payout.failed' || type === 'payout.reversed' || type === 'payout.rejected') {
         // A payout we already recorded as paid can still bounce: that releases the money back to the partner.
-        await markFailed(actx, payout.id, po.failure_reason || type, { reversal: true });
+        await markFailed(actx, payout.id, po.failure_reason || type, { reversal: true, definitive: true });
       }
     } catch (e) {
       if (!(e instanceof HttpError) || e.status !== 409) throw e;

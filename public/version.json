@@ -1,9 +1,9 @@
 {
   "product": "Partner Circle",
   "version": "1.0.3",
-  "releasedAt": "2026-11-21T13:40:03Z",
-  "releasedAtIST": "21 Nov 2026 13:40 IST",
-  "commit": "2585706bddba7456ed603720553aaffa70d6a93a",
+  "releasedAt": "2026-11-21T14:24:41Z",
+  "releasedAtIST": "21 Nov 2026 14:24 IST",
+  "commit": "9db413e4d42e4efeec71781faff96ebd5eb5f6b1",
   "changes": [
     "1.0.3: erasure requests listed in full (oldest first) and shown on the Approvals screen; one record per person even in parallel; index (migration 0006)",
     "1.0.2: erasure requests deduplicated per person and grouped in the owner queue",

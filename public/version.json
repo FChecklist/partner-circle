@@ -1,8 +1,8 @@
 {
   "product": "Partner Circle",
   "version": "1.0.1",
-  "releasedAt": "2026-11-21T10:00:00Z",
-  "releasedAtIST": "21 Nov 2026 15:30 IST",
+  "releasedAt": "2026-11-21T09:00:00Z",
+  "releasedAtIST": "21 Nov 2026 14:30 IST",
   "commit": "94a03832590df8e90bff4e17bad21eac06b92293",
   "changes": [
     "1.0.1: refund/claim and mark-failed re-check payout state inside the atomic step (no release of a sent payout); owner queue flags refunded sale in waiting payout; consent required on server, privacy page, data/rotate/erase buttons; prospect replies uniform and counted",

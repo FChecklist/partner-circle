@@ -177,7 +177,7 @@ route('GET', '/v1/admin/users/:id/kyc', adm('kyc.verify'), async ({ ctx, params 
 route('POST', '/v1/admin/users/:id/verify-email', adm('kyc.verify'), async ({ ctx, params }) => U.ownerVerifyEmail(ctx, params.id));
 route('POST', '/v1/admin/users/:id/placement', adm('users.approve'), async ({ ctx, params, body }) => U.setPlacement(ctx, params.id, body || {}));
 route('POST', '/v1/admin/users/:id/erase', adm('users.erase'), async ({ ctx, params }) => {
-  if (await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE user_id=? AND state IN ('pending','rejected','dead')", [params.id])) {
+  if (await ctx.db.first("SELECT 1 AS x FROM mp_postings m JOIN ledger l ON l.seq=m.ledger_seq JOIN sales s ON s.id=l.sale_id WHERE m.user_id=? AND m.state IN ('pending','rejected','dead') AND s.status='recorded'", [params.id])) {
     throw new HttpError(409, 'posting_open', 'a commission posting to Moneypenny is still open; settle or requeue it first');
   }
   await relink(ctx, params.id, 'suspended'); // tell the engines to stop earning BEFORE the e-mail is erased

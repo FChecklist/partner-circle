@@ -403,3 +403,25 @@ test('audit 4: requeue never resets attempts, so a possibly-credited (dead) clai
   await off.ctx.db.run("UPDATE tenant_profile SET commission_dest='moneypenny'");
   assert.equal((await off.call('POST', '/v1/admin/suite/sweep', { key: off.owner })).data.claimed, 0);
 });
+
+test('audit 5: a crash after sending still counts the attempt (release refused); a refunded claim no longer blocks erase or shows as on the way', async () => {
+  const h = await withEngines();
+  const p = await earner(h, 'Crash');
+  await setDest(h, 'moneypenny');
+  h.fakes.mnp.state.down = true;
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  const row = await h.ctx.db.first('SELECT * FROM mp_postings');
+  assert.equal(row.attempts, 1);
+  assert.ok(row.sent_at);
+  // attempts is bumped in the same batch as sent_at (before the call), so it counts even if the process dies mid-call
+  await h.ctx.db.run("UPDATE mp_postings SET state='pending', attempts=1, next_try_at=0 WHERE ledger_seq=?", [row.ledger_seq]);
+  h.fakes.mnp.state.down = false; h.fakes.mnp.state.rule = null;
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  const r2 = await h.ctx.db.first('SELECT * FROM mp_postings');
+  assert.equal(r2.state, 'rejected');
+  assert.ok(r2.attempts >= 2);
+  assert.equal((await h.call('POST', `/v1/admin/suite/postings/${row.ledger_seq}/release`, { key: h.owner })).data.error.code, 'manual_review');
+  await h.ctx.db.run("UPDATE sales SET status='refunded' WHERE id=(SELECT sale_id FROM ledger WHERE seq=?)", [row.ledger_seq]);
+  const d = (await h.call('GET', '/v1/me/dashboard', { key: p.key })).data;
+  assert.equal(d.commissions.on_the_way_to_moneypenny_minor, 0);
+});

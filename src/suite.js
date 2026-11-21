@@ -185,7 +185,7 @@ export async function dashboard(ctx, user) {
   ]);
   const notes = [];
   for (const [k, b] of [['moneypenny', mnp], ['targets', targets], ['achievements', ach]]) if (SOFT[b.status]) notes.push({ block: k, text: SOFT[b.status] });
-  const pend = await ctx.db.first("SELECT COALESCE(SUM(amount_minor),0) AS n FROM mp_postings WHERE user_id=? AND state IN ('pending','rejected','dead')", [user.id]);
+  const pend = await ctx.db.first("SELECT COALESCE(SUM(m.amount_minor),0) AS n FROM mp_postings m JOIN ledger l ON l.seq=m.ledger_seq JOIN sales s ON s.id=l.sale_id WHERE m.user_id=? AND m.state IN ('pending','rejected','dead') AND s.status='recorded'", [user.id]);
   const done = await ctx.db.first("SELECT COALESCE(SUM(amount_minor),0) AS n FROM mp_postings WHERE user_id=? AND state='posted'", [user.id]);
   return {
     brand: { product_name: prof.product_name, accent: prof.accent, logo_url: prof.logo_url, currency_label: prof.currency_label },
@@ -276,7 +276,7 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
       if (!cur) return [];
       marked = true;
       return [
-        { sql: "UPDATE mp_postings SET sent_at=COALESCE(sent_at, ?) WHERE ledger_seq=? AND state='pending'", params: [ctx.now(), p.ledger_seq] },
+        { sql: "UPDATE mp_postings SET sent_at=COALESCE(sent_at, ?), attempts=attempts+1 WHERE ledger_seq=? AND state='pending'", params: [ctx.now(), p.ledger_seq] }, // attempts counted BEFORE the call: a crash mid-call still counts
         ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: 'moneypenny.send', target: `ledger:${p.ledger_seq}`, meta: { attempt: attempts } }])),
       ];
     });
@@ -329,13 +329,15 @@ export async function releasePosting(ctx, seq) {
   if (p.attempts > 1 || !NO_CREDIT_REASONS.has(p.last_error)) throw new HttpError(409, 'manual_review', 'this refusal cannot prove that no credit exists at Moneypenny; check there first');
   if (!(await ctx.db.first("SELECT 1 AS x FROM ledger l JOIN sales s ON s.id=l.sale_id WHERE l.seq=? AND s.status='recorded'", [seq]))) throw new HttpError(409, 'sale_not_recorded', 'the sale was refunded or changed; the entry stays reversed');
   await atomic(ctx, async () => {
-    if (!(await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE ledger_seq=? AND state='rejected' AND granted_credits IS NULL", [seq]))) return [];
+    // re-checked inside the builder: a refund that lands meanwhile makes the builder re-run and then refuse
+    if (!(await ctx.db.first("SELECT 1 AS x FROM mp_postings m JOIN ledger l ON l.seq=m.ledger_seq JOIN sales s ON s.id=l.sale_id WHERE m.ledger_seq=? AND m.state='rejected' AND m.granted_credits IS NULL AND m.attempts<=1 AND s.status='recorded'", [seq]))) return [];
     return [
       { sql: "DELETE FROM mp_postings WHERE ledger_seq=? AND state='rejected' AND granted_credits IS NULL", params: [seq] },
       ...(await ledgerStmts(ctx, [{ account_id: p.user_id, kind: 'payout_release', amount_minor: p.amount_minor, eligible_at: ctx.now(), ref: `mprelease:${seq}`, memo: 'Moneypenny refused; returned to balance' }])),
       ...(await auditStmts(ctx, [{ action: 'moneypenny.release', target: `ledger:${seq}`, meta: { amount_minor: p.amount_minor, reason: p.last_error } }])),
     ];
   });
+  if (await ctx.db.first('SELECT 1 AS x FROM mp_postings WHERE ledger_seq=?', [seq])) throw new HttpError(409, 'not_released', 'the posting changed meanwhile (for example the sale was refunded); nothing was released');
   return { released: true, ledger_seq: seq };
 }
 

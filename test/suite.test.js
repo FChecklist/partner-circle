@@ -425,3 +425,38 @@ test('audit 5: a crash after sending still counts the attempt (release refused);
   const d = (await h.call('GET', '/v1/me/dashboard', { key: p.key })).data;
   assert.equal(d.commissions.on_the_way_to_moneypenny_minor, 0);
 });
+
+test('cloud audit 2 H1: an unverified e-mail never reaches the engines (no reading another person\'s balance)', async () => {
+  const h = await withEngines();
+  h.fakes.mnp.state.balances['victim@example.test'] = 500000;
+  const p = await h.staff('refer', 'Sneak');
+  await h.call('PATCH', '/v1/me', { key: p.key, body: { email: 'victim@example.test' } });
+  const d = (await h.call('GET', '/v1/me/dashboard', { key: p.key })).data;
+  assert.equal(d.moneypenny.status, 'verify_email');
+  assert.equal(d.moneypenny.credits, undefined);
+  assert.equal(d.monopoly.status, 'verify_email');
+});
+
+test('cloud audit 1 M1: two concurrent runs send a claim once and attempts stays truthful (lease)', async () => {
+  const h = await withEngines();
+  await earner(h, 'Race');
+  await setDest(h, 'moneypenny');
+  let calls = 0;
+  const orig = h.ctx.engines.mnp.postCommission;
+  h.ctx.engines.mnp.postCommission = async (a) => { calls += 1; await new Promise((r) => setTimeout(r, 30)); return orig(a); };
+  await Promise.all([SU.runPostings(h.ctx), SU.runPostings(h.ctx)]);
+  assert.equal(calls, 1, 'one send');
+  const row = await h.ctx.db.first('SELECT attempts, state FROM mp_postings');
+  assert.deepEqual([row.attempts, row.state], [1, 'posted']);
+});
+
+test('cloud audit 1 M3: a sent claim whose sale was refunded is listed for the owner, not silently stuck', async () => {
+  const h = await withEngines();
+  await earner(h, 'Stuck');
+  await setDest(h, 'moneypenny');
+  h.fakes.mnp.state.down = true;
+  await h.call('POST', '/v1/admin/suite/sweep', { key: h.owner });
+  await h.ctx.db.run("UPDATE sales SET status='refunded'");
+  const st = (await h.call('GET', '/v1/admin/suite/status', { key: h.owner })).data;
+  assert.equal(st.refunded_sent.length, 1);
+});

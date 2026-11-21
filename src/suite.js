@@ -166,6 +166,7 @@ const SOFT = {
   setting_up: 'Your account is being set up here. Check again in a minute.',
   not_connected: 'This part is not connected yet.',
   off: 'This part is switched off.',
+  verify_email: 'Verify your e-mail to see this part.',
 };
 
 export async function dashboard(ctx, user) {
@@ -177,11 +178,15 @@ export async function dashboard(ctx, user) {
   } catch { /* retried later */ }
   if (prof.commission_dest === 'moneypenny') { try { await runPostings(ctx, { userId: user.id, limit: 10 }); } catch { /* retried later */ } }
   const mnpOn = !!prof.mnp_enabled, monoOn = !!prof.mono_enabled;
-  const email = user.email;
+  // Engines are asked about an e-mail only after the owner of this account proved it (otherwise anyone could read any e-mail's balance).
+  const verified = !!(user.email_verified && user.email && user.status === 'active');
+  const email = verified ? user.email : null;
+  if (!verified) { try { await ctx.db.run('DELETE FROM engine_cache WHERE user_id=?', [user.id]); } catch { /* display cache only */ } }
+  const none = { status: verified ? 'unavailable' : 'verify_email' };
   const [mnp, targets, ach] = await Promise.all([
-    email ? cachedBlock(ctx, user.id, 'mnp', mnpOn, ctx.engines.mnp, () => ctx.engines.mnp.balance(email), normMnp) : { status: 'unavailable' },
-    email ? cachedBlock(ctx, user.id, 'targets', monoOn, ctx.engines.mono, () => ctx.engines.mono.targets(email), normTargets) : { status: 'unavailable' },
-    email ? cachedBlock(ctx, user.id, 'achievements', monoOn, ctx.engines.mono, () => ctx.engines.mono.achievements(email), normAch) : { status: 'unavailable' },
+    email ? cachedBlock(ctx, user.id, 'mnp', mnpOn, ctx.engines.mnp, () => ctx.engines.mnp.balance(email), normMnp) : none,
+    email ? cachedBlock(ctx, user.id, 'targets', monoOn, ctx.engines.mono, () => ctx.engines.mono.targets(email), normTargets) : none,
+    email ? cachedBlock(ctx, user.id, 'achievements', monoOn, ctx.engines.mono, () => ctx.engines.mono.achievements(email), normAch) : none,
   ]);
   const notes = [];
   for (const [k, b] of [['moneypenny', mnp], ['targets', targets], ['achievements', ach]]) if (SOFT[b.status]) notes.push({ block: k, text: SOFT[b.status] });
@@ -272,15 +277,17 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
     let marked = false;
     await atomic(ctx, async () => {
       marked = false;
-      const cur = await ctx.db.first("SELECT 1 AS x FROM mp_postings WHERE ledger_seq=? AND state='pending'", [p.ledger_seq]);
+      // lease: only one run may send a claim at a time (a second concurrent run sees next_try_at in the future and skips)
+      const cur = await ctx.db.first("SELECT attempts FROM mp_postings WHERE ledger_seq=? AND state='pending' AND next_try_at <= ?", [p.ledger_seq, ctx.now()]);
       if (!cur) return [];
       marked = true;
       return [
-        { sql: "UPDATE mp_postings SET sent_at=COALESCE(sent_at, ?), attempts=attempts+1 WHERE ledger_seq=? AND state='pending'", params: [ctx.now(), p.ledger_seq] }, // attempts counted BEFORE the call: a crash mid-call still counts
+        { sql: "UPDATE mp_postings SET sent_at=COALESCE(sent_at, ?), attempts=attempts+1, next_try_at=? WHERE ledger_seq=? AND state='pending'", params: [ctx.now(), ctx.now() + 120000, p.ledger_seq] }, // attempts counted BEFORE the call: a crash mid-call still counts
         ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: 'moneypenny.send', target: `ledger:${p.ledger_seq}`, meta: { attempt: attempts } }])),
       ];
     });
-    if (!marked) continue; // taken back by a refund in the meantime
+    if (!marked) continue; // taken back by a refund, or another run holds the lease
+    attempts = (await ctx.db.first('SELECT attempts FROM mp_postings WHERE ledger_seq=?', [p.ledger_seq])).attempts; // what the mark step really wrote
     try {
       const r = await mnp.postCommission({
         email: p.email, event_key: p.event_key, cash_minor: p.amount_minor, sale_ref: p.sale_ref, gen: p.gen,
@@ -297,8 +304,8 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
     }
     if (state === 'pending' && attempts >= MAX_ATTEMPTS) state = 'dead';
     await atomic(ctx, async () => [
-      { sql: "UPDATE mp_postings SET state=?, attempts=?, last_error=?, next_try_at=?, granted_credits=?, posted_at=?, gen=gen+? WHERE ledger_seq=? AND state='pending'",
-        params: [state, attempts, err, ctx.now() + backoff(attempts), granted, state === 'posted' ? ctx.now() : null, definite ? 1 : 0, p.ledger_seq] },
+      { sql: "UPDATE mp_postings SET state=?, last_error=?, next_try_at=?, granted_credits=?, posted_at=?, gen=gen+? WHERE ledger_seq=? AND state='pending'",
+        params: [state, err, ctx.now() + backoff(attempts), granted, state === 'posted' ? ctx.now() : null, definite ? 1 : 0, p.ledger_seq] },
       ...(await auditStmts({ ...ctx, actor: ctx.actor || { type: 'system' } }, [{ action: `moneypenny.${state === 'pending' ? 'retry' : state}`, target: `ledger:${p.ledger_seq}`, meta: { reason: err, granted, attempts } }])),
     ]);
     await ctx.db.run("DELETE FROM engine_cache WHERE user_id=? AND block='mnp'", [p.user_id]);
@@ -351,5 +358,7 @@ export async function suiteStatus(ctx) {
     links: await ctx.db.all('SELECT engine, state, COUNT(*) AS n FROM engine_links GROUP BY engine, state'),
     postings: await ctx.db.all('SELECT state, COUNT(*) AS n, COALESCE(SUM(amount_minor),0) AS amount_minor FROM mp_postings GROUP BY state'),
     exceptions: await ctx.db.all("SELECT ledger_seq, user_id, amount_minor, state, last_error, attempts FROM mp_postings WHERE state IN ('rejected','dead') ORDER BY ledger_seq LIMIT 50"),
+    // sent to Moneypenny, then the sale was refunded: never delivered again, needs the owner to reconcile with Moneypenny (no clawback)
+    refunded_sent: await ctx.db.all("SELECT m.ledger_seq, m.user_id, m.amount_minor, m.state, m.attempts FROM mp_postings m JOIN ledger l ON l.seq=m.ledger_seq JOIN sales s ON s.id=l.sale_id WHERE m.sent_at IS NOT NULL AND m.state IN ('pending','rejected','dead') AND s.status<>'recorded' ORDER BY m.ledger_seq LIMIT 50"),
   };
 }

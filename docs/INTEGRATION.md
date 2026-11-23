@@ -51,7 +51,7 @@ no click id) is attributed to the partner who brought the sign-up.
 POST /v1/integration/sales
 X-PC-Site: mom
 X-PC-Timestamp: <epoch ms>
-X-PC-Signature: hex( HMAC_SHA256( signing_secret, "<timestamp>.<raw request body>" ) )
+X-PC-Signature: hex( HMAC_SHA256( signing_secret, "<timestamp>.<METHOD>.<path>.<raw request body>" ) )   e.g. "1760000000000.POST./v1/integration/sales.{...}"
 
 {
   "order_id": "MOM-10432",            // your id; the pair (site, order_id) is unique, so retries are safe
@@ -74,7 +74,7 @@ Timestamp must be within 5 minutes of PC's clock. Sign the exact bytes you send.
 import { createHmac } from 'node:crypto';
 const body = JSON.stringify({ order_id: 'MOM-10432', amount_minor: 49900, tax_minor: 7612, razorpay_payment_id: 'pay_x', click_id });
 const ts = String(Date.now());
-const sig = createHmac('sha256', process.env.PC_SIGNING_SECRET).update(`${ts}.${body}`).digest('hex');
+const sig = createHmac('sha256', process.env.PC_SIGNING_SECRET).update(`${ts}.POST./v1/integration/sales.${body}`).digest('hex');
 await fetch('https://PC/v1/integration/sales', { method: 'POST', body, headers: { 'X-PC-Site': 'mom', 'X-PC-Timestamp': ts, 'X-PC-Signature': sig } });
 ```
 

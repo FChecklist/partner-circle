@@ -1,3 +1,5 @@
+// OWNER RULE: payments run only through Moneypenny -> IT Services -> Razorpay. The direct RazorpayX adapter below stays OFF and unreachable by default
+// (PAYOUT_MODE unset = mock). Do NOT switch it on without a written owner decision. Do not delete the mock.
 // Outbound adapters. Everything that could touch real money or real e-mail sits behind these small interfaces,
 // and the defaults are inert mocks. Nothing here is live until the owner supplies credentials AND flips the mode.
 

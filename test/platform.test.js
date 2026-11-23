@@ -55,7 +55,7 @@ test('Pages Function on the D1 adapter: register, link, signed sale, owner appro
   const site = await db.first("SELECT * FROM sites WHERE id='mom'");
   const body = JSON.stringify({ order_id: 'd1-1', amount_minor: 100000, click_id: pc });
   const ts = String(Date.now());
-  const sig = await signBody(await siteSecret(seedCtx, site), ts, body);
+  const sig = await signBody(await siteSecret(seedCtx, site), ts, 'POST', '/v1/integration/sales', body);
   const sale = await onRequest({ request: new Request('https://pc.test/v1/integration/sales', { method: 'POST', body, headers: { 'x-pc-site': 'mom', 'x-pc-timestamp': ts, 'x-pc-signature': sig } }), env });
   const sj = await sale.json();
   assert.equal(sale.status, 201);

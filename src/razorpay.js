@@ -16,18 +16,19 @@ export async function verifyRazorpaySignature(ctx, req, rawBody) {
   if (!timingSafeEqualStr(expect, sig.toLowerCase())) throw new HttpError(401, 'invalid_signature', 'signature does not match');
 }
 
-/** Razorpay sends X-Razorpay-Event-Id; if absent we derive a stable id from the body so replays still dedupe. */
+/** The event id is derived from the SIGNED body (event type + entity id), never from a header, so a replay with a new header still dedupes. */
 export async function handleRazorpayWebhook(ctx, req, rawBody) {
   await verifyRazorpaySignature(ctx, req, rawBody);
   let evt;
   try { evt = JSON.parse(rawBody); } catch { throw new HttpError(400, 'invalid_json', 'body is not JSON'); }
   const type = String(evt.event || '');
   if (!type) throw new HttpError(422, 'invalid_event', 'event type missing');
-  const eventId = req.headers.get('x-razorpay-event-id') || `body:${await ctx.hash(rawBody)}`;
   const pay = evt.payload?.payment?.entity;
   const ref = evt.payload?.refund?.entity;
   const po = evt.payload?.payout?.entity;
   const disp = evt.payload?.dispute?.entity;
+  const entityId = ref?.id || disp?.id || po?.id || pay?.id;
+  const eventId = entityId ? `${type}:${entityId}` : `body:${await ctx.hash(rawBody)}`;
   const paymentId = pay?.id || ref?.payment_id || disp?.payment_id || null;
   const amount = pay?.amount ?? ref?.amount ?? disp?.amount ?? po?.amount ?? null;
 

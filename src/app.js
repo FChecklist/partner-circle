@@ -245,7 +245,7 @@ route('PUT', '/v1/admin/policy', adm('policy.write'), async ({ ctx, body }) => {
   const entries = Object.entries(body || {});
   if (!entries.length) throw new HttpError(422, 'invalid_body', 'send at least one policy key');
   for (const [k, v] of entries) {
-    if (!POLICY_VALIDATORS[k]) throw new HttpError(422, 'unknown_policy', `${k} is not a policy key`);
+    if (!Object.hasOwn(POLICY_VALIDATORS, k)) throw new HttpError(422, 'unknown_policy', `${k} is not a policy key`);
     if (!POLICY_VALIDATORS[k](v)) throw new HttpError(422, 'invalid_policy', `${k} has an out-of-range or malformed value`);
   }
   await atomic(ctx, async () => [
@@ -272,7 +272,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const vals = [];
   const b = body || {};
   for (const [k, v] of Object.entries(b)) {
-    if (!rules[k]) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
+    if (!Object.hasOwn(rules, k)) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
     if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'host must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
     sets.push(`${k}=?`); vals.push(typeof v === 'string' ? v.trim() : v);
   }

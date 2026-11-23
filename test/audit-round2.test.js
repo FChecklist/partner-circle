@@ -310,3 +310,23 @@ test('sec round 4: 60 people asking for erasure all appear (oldest first) and 40
   await Promise.all(Array.from({ length: 40 }, () => h.call('POST', '/v1/me/erase-request', { key: par.key })));
   assert.equal((await h.ctx.db.first("SELECT COUNT(*) AS n FROM audit_log WHERE action='user.erase_requested' AND target=?", [`user:${par.id}`])).n, 1);
 });
+
+test('round 5: a signed sale body cannot be replayed to the refunds endpoint; razorpay replay with a new event-id header is ignored; constructor is refused; erasure list empties', async () => {
+  const h = await mk();
+  const { signBody, siteSecret } = await import('../src/auth.js');
+  const site = await h.ctx.db.first("SELECT * FROM sites WHERE id='mom'");
+  const raw = JSON.stringify({ order_id: 'rp1', amount_minor: 100000 });
+  const sig = await signBody(await siteSecret(h.ctx, site), String(h.clock.t), 'POST', '/v1/integration/sales', raw);
+  const hd = { 'x-pc-site': 'mom', 'x-pc-timestamp': String(h.clock.t), 'x-pc-signature': sig };
+  assert.equal((await h.call('POST', '/v1/integration/sales', { rawBody: raw, headers: hd })).status, 201);
+  assert.equal((await h.call('POST', '/v1/integration/refunds', { rawBody: raw, headers: hd })).status, 401, 'same signature, other path: refused');
+  const ev = { event: 'refund.processed', payload: { refund: { entity: { id: 'rfnd_1', payment_id: 'pay_x', amount: 500 } } } };
+  assert.equal((await h.rzp(ev, { eventId: 'a' })).data.duplicate, undefined);
+  assert.equal((await h.rzp(ev, { eventId: 'b' })).data.duplicate, true, 'new header, same signed body: still a duplicate');
+  assert.equal((await h.call('PUT', '/v1/admin/policy', { key: h.owner, body: { constructor: 1 } })).status, 422);
+  const p = await h.staff('partner', 'Gone');
+  await h.call('POST', '/v1/me/erase-request', { key: p.key });
+  assert.equal((await h.call('GET', '/v1/admin/queue', { key: h.owner })).data.erase_requests.length, 1);
+  await h.call('POST', `/v1/admin/users/${p.id}/erase`, { key: h.owner });
+  assert.equal((await h.call('GET', '/v1/admin/queue', { key: h.owner })).data.erase_requests.length, 0);
+});

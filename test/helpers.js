@@ -48,7 +48,7 @@ export async function mk(opts = {}) {
       const site = await db.first('SELECT * FROM sites WHERE id=?', [siteId]);
       const raw = body === undefined ? '' : JSON.stringify(body);
       const stamp = String(ts ?? clock.t);
-      const sig = await signBody(secretOverride ?? (await siteSecret(ctx, site)), stamp, raw);
+      const sig = await signBody(secretOverride ?? (await siteSecret(ctx, site)), stamp, method, path, raw);
       return h.call(method, path, { rawBody: raw, headers: { 'x-pc-site': siteId, 'x-pc-timestamp': stamp, 'x-pc-signature': sig } });
     },
     async rzp(event, { eventId, secret = ENV.RAZORPAY_WEBHOOK_SECRET } = {}) {

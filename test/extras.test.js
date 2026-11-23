@@ -93,7 +93,7 @@ test('the signing recipe in docs/INTEGRATION.md works with plain node:crypto, an
   const secret = await siteSecret(h.ctx, site);
   const body = JSON.stringify({ order_id: 'MOM-10432', amount_minor: 49900, tax_minor: 7612 });
   const ts = String(h.clock.t);
-  const sig = createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex');
+  const sig = createHmac('sha256', secret).update(`${ts}.POST./v1/integration/sales.${body}`).digest('hex');
   const r = await h.call('POST', '/v1/integration/sales', { rawBody: body, headers: { 'x-pc-site': 'mom', 'x-pc-timestamp': ts, 'x-pc-signature': sig } });
   assert.equal(r.status, 201);
   assert.equal(r.data.net_minor, 42288);

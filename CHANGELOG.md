@@ -2,6 +2,13 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.6 - 23 Nov 2026
+- Site calls are now signed over time, method, path and body, so a signed sale cannot be replayed against another endpoint (sites must update their signing line; see docs/INTEGRATION.md).
+- Razorpay events are de-duplicated by the event type and entity id inside the signed body, not by a header anyone could change.
+- Direct RazorpayX payout code is documented as OFF unless the owner decides otherwise.
+- Privacy page: how long records are kept and what stays after erasure, in plain words; layout fixed; "Need help?" line tidied.
+- The erasure list empties once a request is completed; field names like `constructor` are refused in settings.
+
 ## 1.0.5 - 23 Nov 2026
 - Sign-up has no tick box and no "I agree" button (owner rule v1.3). The form shows a gentle line with links to the Terms and Conditions and the Privacy notice; sign-up works without any consent field and ignores one if an old app sends it. The privacy notice is now version 2026-11-23.
 - Added a short Terms and Conditions page (/terms.html) for the owner to finalise.

@@ -72,7 +72,7 @@ const sale = async (siteId, fields) => {
   const body = { tax_minor: 0, ...fields };
   const raw = JSON.stringify(body);
   const site = await db.first('SELECT * FROM sites WHERE id=?', [siteId]);
-  const sig = await signBody(await siteSecret(ctx, site), String(clock), raw);
+  const sig = await signBody(await siteSecret(ctx, site), String(clock), 'POST', '/v1/integration/sales', raw);
   await call('POST', '/v1/integration/sales', { body, headers: { 'x-pc-site': siteId, 'x-pc-timestamp': String(clock), 'x-pc-signature': sig } });
   const evt = JSON.stringify({ event: 'payment.captured', payload: { payment: { entity: { id: body.razorpay_payment_id, amount: body.amount_minor } } } });
   await handle(ctx, new Request('http://seed.local/v1/webhooks/razorpay', { method: 'POST', headers: { 'x-razorpay-signature': await hmacHex(env.RAZORPAY_WEBHOOK_SECRET, evt), 'x-razorpay-event-id': `evt_${body.razorpay_payment_id}` }, body: evt }));

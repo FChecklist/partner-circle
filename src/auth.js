@@ -111,9 +111,10 @@ export function requireKind(actor, ...kinds) {
 
 export const siteSecret = (ctx, site) => hmacHex(ctx.secret('SITE_SECRET_MASTER'), `site:${site.id}:${site.secret_version}`);
 
-export const signBody = (secret, ts, body) => hmacHex(secret, `${ts}.${body}`);
+/** The signature covers timestamp, HTTP method, path and body, so a signed body cannot be replayed to a different endpoint. */
+export const signBody = (secret, ts, method, path, body) => hmacHex(secret, `${ts}.${String(method).toUpperCase()}.${path}.${body}`);
 
-/** Verify X-PC-Site / X-PC-Timestamp / X-PC-Signature (HMAC-SHA256 over "<ts>.<raw body>"), 5-minute replay window. */
+/** Verify X-PC-Site / X-PC-Timestamp / X-PC-Signature (HMAC-SHA256 over "<ts>.<METHOD>.<path>.<raw body>"), 5-minute replay window. */
 export async function verifySiteSignature(ctx, req, rawBody) {
   const siteId = req.headers.get('x-pc-site');
   const ts = req.headers.get('x-pc-timestamp');
@@ -123,7 +124,7 @@ export async function verifySiteSignature(ctx, req, rawBody) {
   if (!Number.isFinite(t) || Math.abs(ctx.now() - t) > 5 * 60000) throw new HttpError(401, 'stale_signature', 'timestamp outside the 5 minute window');
   const site = await ctx.db.first('SELECT * FROM sites WHERE id=? AND active=1', [siteId]);
   if (!site) throw new HttpError(401, 'invalid_signature', 'unknown site');
-  const expect = await signBody(await siteSecret(ctx, site), ts, rawBody);
+  const expect = await signBody(await siteSecret(ctx, site), ts, req.method, new URL(req.url).pathname, rawBody);
   if (!timingSafeEqualStr(expect, sig.toLowerCase())) throw new HttpError(401, 'invalid_signature', 'signature does not match');
   await rateLimit(ctx, `site:${site.id}`, 600);
   return site;

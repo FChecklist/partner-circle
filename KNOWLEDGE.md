@@ -1,7 +1,7 @@
 # Partner Circle: knowledge file
 
 ## Version
-- Current version: **1.0.5** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
+- Current version: **1.0.6** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
 - Rule (owner order, 21 Nov 2026): every product, site and page update carries a version number and version notes, saved in git. Bump `package.json`, `public/version.json` and add a `CHANGELOG.md` entry for every release.
 
 ## Where things are
@@ -11,4 +11,6 @@
 - Tests: `npm test` (node 22). Build check: `npm run build`.
 
 - Grievance contact (owner decision, 23 Nov 2026): shown as a plain line in the footer (`public/index.html`) and `public/privacy.html`; wording is gentle, no tick box. Change it in those two files and `docs/PRIVACY.md`.
+- Payments (owner rule): money moves only via Moneypenny -> IT Services -> Razorpay. The direct RazorpayX code (`src/adapters.js`, `src/payouts.js`, `src/razorpay.js`) is OFF by default (PAYOUT_MODE unset = mock) and must not be switched on without an owner decision.
+- Site signatures cover timestamp, method, path and body (1.0.6); Razorpay webhook dedupe uses the event type and entity id inside the signed body.
 - Sign-up (owner rule v1.3, 23 Nov 2026): no checkbox and no accept button anywhere; only plain Terms and Privacy links. `releasedAtIST` is UTC plus 5h30m.

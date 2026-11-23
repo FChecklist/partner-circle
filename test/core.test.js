@@ -110,7 +110,7 @@ test('signed site webhooks: valid, wrong secret, stale timestamp, tampered body,
   // sign one body, send another
   const { signBody, siteSecret } = await import('../src/auth.js');
   const site = await h.db.first("SELECT * FROM sites WHERE id='mom'");
-  const sig = await signBody(await siteSecret(h.ctx, site), String(h.clock.t), JSON.stringify({ order_id: 'o4', amount_minor: 1 }));
+  const sig = await signBody(await siteSecret(h.ctx, site), String(h.clock.t), 'POST', '/v1/integration/sales', JSON.stringify({ order_id: 'o4', amount_minor: 1 }));
   const r = await h.call('POST', '/v1/integration/sales', { rawBody: JSON.stringify({ order_id: 'o4', amount_minor: 99999999 }), headers: { 'x-pc-site': 'mom', 'x-pc-timestamp': String(h.clock.t), 'x-pc-signature': sig } });
   assert.equal(r.status, 401);
   assert.equal((await h.call('POST', '/v1/integration/sales', { body })).status, 401);

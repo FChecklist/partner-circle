@@ -1,9 +1,9 @@
 {
   "product": "Partner Circle",
   "version": "1.0.5",
-  "releasedAt": "2026-11-23T08:22:06Z",
-  "releasedAtIST": "23 Nov 2026 08:22 IST",
-  "commit": "90467b0620c9fb4c4deaddc5269d0dd4e609da71",
+  "releasedAt": "2026-11-23T08:32:36Z",
+  "releasedAtIST": "23 Nov 2026 14:02 IST",
+  "commit": "1d312dfb4fd24b0219db28c0dd26c7f937f532be",
   "changes": [
     "1.0.5: no tick box or accept button at sign-up (plain Terms and Privacy links); privacy notice 2026-11-23; footer time now true IST; terms page",
     "1.0.4: grievance officer contact line added to the footer and privacy page (plain text)",

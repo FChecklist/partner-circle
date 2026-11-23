@@ -2,6 +2,9 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.4 - 23 Nov 2026
+- A friendly "Need help?" line with the grievance officer's name, e-mail and WhatsApp number is now in the page footer and on the privacy page. It is plain text: no tick box, no button.
+
 ## 1.0.3 - 21 Nov 2026
 - Erasure requests: the owner queue lists every request, oldest first (no cut-off), and the Approvals screen now shows them. Two requests at the same instant still write one record. New database index (migration 0006) keeps the lookups cheap.
 

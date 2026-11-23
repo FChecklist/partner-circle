@@ -1,7 +1,7 @@
 # Partner Circle: knowledge file
 
 ## Version
-- Current version: **1.0.3** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
+- Current version: **1.0.4** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
 - Rule (owner order, 21 Nov 2026): every product, site and page update carries a version number and version notes, saved in git. Bump `package.json`, `public/version.json` and add a `CHANGELOG.md` entry for every release.
 
 ## Where things are
@@ -9,3 +9,5 @@
 - Handover and status: `docs/STATE.md`; open owner choices: `docs/OWNER-DECISIONS.md`; privacy: `docs/PRIVACY.md`; audits: PR comments and `docs/AUDIT-pass*.md`.
 - Switches: `PAYOUT_MODE` (unset = mock, nothing real is paid), `MNP_COMMISSION_ENABLED=1` (commission to Moneypenny; off in v1), `ALLOW_OWNER_VOUCH=1` (emergency only).
 - Tests: `npm test` (node 22). Build check: `npm run build`.
+
+- Grievance contact (owner decision, 23 Nov 2026): shown as a plain line in the footer (`public/index.html`) and `public/privacy.html`; wording is gentle, no tick box. Change it in those two files and `docs/PRIVACY.md`.

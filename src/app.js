@@ -12,7 +12,7 @@ import * as SC from './schemes.js';
 import * as PR from './prospects.js';
 import * as SU from './suite.js';
 
-const PRIVACY_NOTICE_VERSION = '2026-11-21';
+const PRIVACY_NOTICE_VERSION = '2026-11-23';
 import { handleRazorpayWebhook } from './razorpay.js';
 import { purgeExpired } from './retention.js';
 
@@ -34,10 +34,9 @@ route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx })
 
 // (idem:false: the response holds a login key, which must never be cached)
 route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => {
-  if (body?.consent !== true) throw new HttpError(422, 'consent_required', 'please read the privacy notice and agree to it to sign up');
   const out = await U.register(ctx, body);
-  // DPDP: the sign-up form shows the privacy notice and the person ticks it; the consent and the notice version are recorded in the audit log
-  await audit({ ...ctx, actor: { type: 'user', id: out.user.id } }, 'user.consent', `user:${out.user.id}`, { notice_version: PRIVACY_NOTICE_VERSION });
+  // No tick box (owner rule v1.3): the form shows the notice and links; we record which notice version was shown at sign-up (any consent field an old client sends is ignored)
+  await audit({ ...ctx, actor: { type: 'user', id: out.user.id } }, 'user.notice_shown', `user:${out.user.id}`, { notice_version: PRIVACY_NOTICE_VERSION });
   return [201, out];
 });
 

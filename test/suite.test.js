@@ -55,7 +55,7 @@ test('Monopoly border: signed people calls, unknown person is a clean error, bad
 
 test('approval provisions the partner into both engines with no second login; engine down never blocks approval and is retried', async () => {
   const h = await withEngines();
-  const r = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543210' } });
+  const r = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543210' } });
   const key = r.data.api_key; const id = r.data.user.id;
   assert.equal(h.fakes.mono.state.people.size, 0, 'pending partners are not provisioned');
   h.fakes.mono.state.down = true;

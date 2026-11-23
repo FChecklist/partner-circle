@@ -1,10 +1,11 @@
 {
   "product": "Partner Circle",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "releasedAt": "2026-11-23T08:22:06Z",
   "releasedAtIST": "23 Nov 2026 08:22 IST",
   "commit": "90467b0620c9fb4c4deaddc5269d0dd4e609da71",
   "changes": [
+    "1.0.5: no tick box or accept button at sign-up (plain Terms and Privacy links); privacy notice 2026-11-23; footer time now true IST; terms page",
     "1.0.4: grievance officer contact line added to the footer and privacy page (plain text)",
     "1.0.3: erasure requests listed in full (oldest first) and shown on the Approvals screen; one record per person even in parallel; index (migration 0006)",
     "1.0.2: erasure requests deduplicated per person and grouped in the owner queue",

@@ -39,7 +39,7 @@ test('deal registration: a registered prospect is protected from a later click b
   assert.equal(s2.data.attribution, 'click');
   assert.equal(s2.data.partner_handle, b.handle);
   assert.equal((await h.call('GET', '/v1/me/prospects', { key: a.key })).data.prospects.length, 1);
-  const r = (await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rita' } })).data;
+  const r = (await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rita' } })).data;
   assert.equal((await h.call('POST', '/v1/me/prospects', { key: r.api_key, body: { site_id: 'mom', customer_email: 'x@example.test' } })).status, 403);
 });
 

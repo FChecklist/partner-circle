@@ -2,6 +2,12 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.5 - 23 Nov 2026
+- Sign-up has no tick box and no "I agree" button (owner rule v1.3). The form shows a gentle line with links to the Terms and Conditions and the Privacy notice; sign-up works without any consent field and ignores one if an old app sends it. The privacy notice is now version 2026-11-23.
+- Added a short Terms and Conditions page (/terms.html) for the owner to finalise.
+- Fixed the release time shown in the footer: it showed the UTC time labelled IST.
+- Notes for the owner: a check to run before applying migration 0003.
+
 ## 1.0.4 - 23 Nov 2026
 - A friendly "Need help?" line with the grievance officer's name, e-mail and WhatsApp number is now in the page footer and on the privacy page. It is plain text: no tick box, no button.
 

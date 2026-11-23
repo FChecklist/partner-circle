@@ -11,4 +11,6 @@ These are business rules the owner set earlier. They were NOT changed by the bui
 7. **Lows not done:** site signature does not cover method and path; KYC key has no KDF; verification code is 6 digits with a resettable counter; `email_taken` reveals registered e-mails; `constructor` key 500 on admin PATCH; bad `%` in a URL returns 500; leaked site key can set leads; AI keys can suspend users; no HSTS header; chain not anchored outside D1.
 
 ## Launch gate (must be done by the owner before inviting Indian partners)
+- Terms and Conditions: `public/terms.html` is a short plain summary taken from the existing footer text. The owner should replace it with the final Terms before launch.
+- Before applying migration 0003 (unique index on `sales.razorpay_payment_id`), run on D1: `SELECT razorpay_payment_id, COUNT(*) AS n FROM sales WHERE razorpay_payment_id IS NOT NULL GROUP BY razorpay_payment_id HAVING n > 1;` It must return no rows; otherwise the migration fails.
 - DONE 23 Nov 2026: the grievance contact was decided by the owner and added (footer, `public/privacy.html`, `docs/PRIVACY.md`). Still gated: apply D1 migrations 0003-0006 only after the audits pass.

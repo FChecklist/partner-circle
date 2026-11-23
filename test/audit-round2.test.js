@@ -161,7 +161,7 @@ test('sec M6: the leaderboard names only you, shows no handles; the owner queue 
   const lb = (await h.call('GET', '/v1/leaderboard', { key: other.key })).data.month;
   assert.ok(lb.length >= 1);
   for (const r of lb) { assert.equal(r.handle, undefined); assert.equal(r.first_name, null); }
-  const reg = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543211', sponsor: boss.handle } });
+  const reg = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Newbie', email: 'newbie@example.test', phone: '9876543211', sponsor: boss.handle } });
   assert.equal(reg.status, 201);
   const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
   assert.equal(q.partners.find((x) => x.name === 'Newbie').sponsor.handle, boss.handle);
@@ -177,16 +177,16 @@ test('sec M8: key use is written at most once per 10 minutes; a flood past the l
   assert.equal((await h.ctx.db.first('SELECT last_used_at AS t FROM api_keys WHERE user_id=?', [p.id])).t, t1);
 });
 
-test('sec M7: sign-up records consent and the notice version; a person can export their data and ask for erasure', async () => {
+test('sec M7: sign-up records the notice version shown (no consent field needed); a person can export their data and ask for erasure', async () => {
   const h = await mk();
-  const reg = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Dpdp', email: 'dpdp@example.test', phone: '9876543212' } });
+  const reg = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Dpdp', email: 'dpdp@example.test', phone: '9876543212' } });
   assert.equal(reg.status, 201);
   const k = reg.data.api_key;
   const ex = await h.call('GET', '/v1/me/export', { key: k });
   assert.equal(ex.status, 200);
   assert.ok(ex.data.shared_with.length >= 2 && ex.data.notice_version);
   assert.equal((await h.call('POST', '/v1/me/erase-request', { key: k })).data.requested, true);
-  const log = await h.ctx.db.all("SELECT action FROM audit_log WHERE action IN ('user.consent','user.erase_requested')");
+  const log = await h.ctx.db.all("SELECT action FROM audit_log WHERE action IN ('user.notice_shown','user.erase_requested')");
   assert.equal(log.length, 2);
 });
 
@@ -278,7 +278,11 @@ test('sec round 2: held and fresh prospect replies look the same; rotate is neve
   const rot = await h.call('POST', '/v1/me/keys/rotate', { key: a.key, headers: { 'idempotency-key': 'k1' } });
   assert.equal(rot.status, 200);
   assert.equal(await h.ctx.db.first("SELECT 1 AS x FROM idempotency WHERE body LIKE '%' || ? || '%'", [rot.data.api_key]), null, 'new key is not stored in clear');
-  assert.equal((await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'No', email: 'no@example.test', phone: '9876543299' } })).data.error.code, 'consent_required');
+  const nc = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'No', email: 'no@example.test', phone: '9876543299' } });
+  assert.equal(nc.status, 201, 'sign-up works with no consent field');
+  const old = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Old', email: 'old@example.test', phone: '9876543298' } });
+  assert.equal(old.status, 201, 'an old client that still sends consent is accepted and the field is ignored');
+  assert.equal((await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Bad', email: 'not-an-email', phone: '9876543297' } })).status, 422, 'bad input is still rejected');
   await h.call('POST', '/v1/me/erase-request', { key: rot.data.api_key });
   const q = (await h.call('GET', '/v1/admin/queue', { key: h.owner })).data;
   assert.equal(q.erase_requests.length, 1);

@@ -4,7 +4,7 @@ import { mk, DAY } from './helpers.js';
 
 test('Refer and Earn: register with no e-mail, active at once, can create a link, cannot create a code', async () => {
   const h = await mk();
-  const r = await h.call('POST', '/v1/register', { body: { consent: true, role: 'refer', name: 'Rita Refer' } });
+  const r = await h.call('POST', '/v1/register', { body: { role: 'refer', name: 'Rita Refer' } });
   assert.equal(r.status, 201);
   assert.equal(r.data.user.status, 'active');
   assert.equal(r.data.user.email_masked, null);
@@ -19,15 +19,15 @@ test('Refer and Earn: register with no e-mail, active at once, can create a link
 test('Growth Partner registration: contact details mandatory, duplicate e-mail refused, starts pending, owner approval needed', async () => {
   const h = await mk();
   const base = { role: 'partner', name: 'Imran', email: 'imran@example.test', phone: '+91 98765 43210' };
-  assert.equal((await h.call('POST', '/v1/register', { body: { consent: true, ...base, email: undefined } })).status, 422);
-  assert.equal((await h.call('POST', '/v1/register', { body: { consent: true, ...base, phone: '12' } })).status, 422);
-  assert.equal((await h.call('POST', '/v1/register', { body: { consent: true, ...base, email: 'not-an-email' } })).status, 422);
-  const ok = await h.call('POST', '/v1/register', { body: { consent: true, ...base } });
+  assert.equal((await h.call('POST', '/v1/register', { body: { ...base, email: undefined } })).status, 422);
+  assert.equal((await h.call('POST', '/v1/register', { body: { ...base, phone: '12' } })).status, 422);
+  assert.equal((await h.call('POST', '/v1/register', { body: { ...base, email: 'not-an-email' } })).status, 422);
+  const ok = await h.call('POST', '/v1/register', { body: { ...base } });
   assert.equal(ok.status, 201);
   assert.equal(ok.data.user.status, 'pending');
   assert.equal(ok.data.user.email_masked, 'i***@example.test');
   assert.ok(!JSON.stringify(ok.data).includes('imran@example.test'), 'raw e-mail never echoed');
-  assert.equal((await h.call('POST', '/v1/register', { body: { consent: true, ...base, email: 'IMRAN@example.test' } })).status, 409);
+  assert.equal((await h.call('POST', '/v1/register', { body: { ...base, email: 'IMRAN@example.test' } })).status, 409);
   // pending partner cannot make links yet
   assert.equal((await h.call('POST', '/v1/me/links', { key: ok.data.api_key, body: { site_id: 'mom' } })).status, 403);
   // AI cannot approve; owner can
@@ -51,13 +51,13 @@ test('hierarchy rules: manager > leader > exec > partner; invalid reporting line
   const bad2 = await h.call('POST', '/v1/admin/users', { key: h.owner, body: { role: 'leader', name: 'Y', email: 'y@example.test', phone: '9876543210', parent_id: p.id } });
   assert.equal(bad2.status, 422);
   // partner self-registers under an exec's sponsor handle
-  const reg = await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Julie', email: 'julie@example.test', phone: '9876500000', sponsor: e.handle } });
+  const reg = await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Julie', email: 'julie@example.test', phone: '9876500000', sponsor: e.handle } });
   assert.equal(reg.status, 201);
   assert.equal((await h.call('GET', '/v1/me', { key: reg.data.api_key })).data.sponsor.handle, e.handle);
   const team = await h.call('GET', '/v1/me/team', { key: m.key });
   assert.deepEqual(team.data.members.map((x) => [x.role, x.depth]), [['leader', 1], ['exec', 2], ['partner', 3], ['partner', 3]]);
   assert.equal((await h.call('GET', '/v1/me/team', { key: p.key })).data.members.length, 0);
-  assert.equal((await h.call('POST', '/v1/register', { body: { consent: true, role: 'partner', name: 'Z', email: 'z@example.test', phone: '9876500001', sponsor: 'nonexist' } })).status, 422);
+  assert.equal((await h.call('POST', '/v1/register', { body: { role: 'partner', name: 'Z', email: 'z@example.test', phone: '9876500001', sponsor: 'nonexist' } })).status, 422);
 });
 
 test('AI-created staff are pending until the owner approves (AI proposes, owner approves)', async () => {

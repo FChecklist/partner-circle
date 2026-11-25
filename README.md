@@ -40,7 +40,7 @@ npm test            # node --test "test/*.test.js"  (no dependencies; run it for
 npm run build       # syntax-checks every JS file, replays migrations on an empty DB, seeds the sites
 ```
 
-Last run (11 Nov 2026, after the independent-review hardening): **108 / 108 pass** on this laptop (Node 26.3) and, from a fresh copy of the sources, on the partner laptop (Node 22.23.4). Both were real runs of `node --test test/*.test.js`. What the suites prove:
+Last run (25 Nov 2026, after the money-rule recheck, version 1.0.7): see the pull request for the exact count; every file was run on its own with `node --test` and the same files run in CI (Node 22 and 24). The older 11 Nov figure (108 / 108) is out of date. New this round: `test/money-recheck.test.js` (the owner's money decisions, one test each) and `test/dashboard-contract.test.js` (the dashboard document against the real answer). What the suites prove:
 
 | File | Covers |
 |---|---|

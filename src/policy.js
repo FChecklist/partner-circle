@@ -112,8 +112,10 @@ export function payoutWaitText(site) {
 /**
  * Seed values: games/Townhall have no return window (7 days total); Veridian products and PROJEXA have 30 (+7 = 37), paid 80% after 7 days
  * and the last 20% after 37 (owner, 14 Nov 2026: `early_release_bps` 8000).
- * Corporate Tambola (the lead product): Refer and Earn 25% and Growth Partner 25% (owner, 14 Nov 2026) and no discount codes
- * (review of 14 Nov 2026, item 8: the game price list is fixed). The other rates are still SAMPLES until the owner gives the rate card per product.
+ * Corporate Tambola (the lead product): Refer and Earn 25% and Growth Partner 25% (owner, 14 Nov 2026). No discount codes on the games and
+ * Townhall products (review of 14 Nov 2026, item 8: their price list is fixed; "switch codes off for the games until you decide", approved).
+ * DPDP and MOM keep their sample 10% codes until the owner answers whether those go too (docs/OWNER-DECISIONS.md). The other rates are still
+ * SAMPLES until the owner gives the rate card per product.
  * `confirmed` = the host appears in the owner's own domain map (2 Nov 2026). The others are best guesses, so they seed INACTIVE
  * and the owner switches them on after confirming the host (PATCH /v1/admin/sites/:id {host, host_confirmed:1, active:1}).
  * The two Townhall products from the demo used elections./meetings.townhall.com, which is not an owner domain; they now sit under
@@ -127,7 +129,7 @@ export const DEFAULT_SITES = [
   { id: 'tam', host: 'home.corporatetambola.com', name: 'Corporate Tambola', confirmed: 1, return_days: 0, early_release_bps: 0, commission_bps: 2500, refer_bps: 2500, discount_allowed: 0, max_discount_bps: 0 },
   { id: 'voter', host: 'voterlist.townhall-records.com', name: 'Voter List', confirmed: 0, return_days: 0, early_release_bps: 0, commission_bps: 1000, refer_bps: 300, discount_allowed: 0, max_discount_bps: 0 },
   { id: 'th', host: 'townhall-records.com', name: 'Townhall Records', confirmed: 1, return_days: 0, early_release_bps: 0, commission_bps: 1000, refer_bps: 300, discount_allowed: 0, max_discount_bps: 0 },
-  { id: 'el', host: 'elections.townhall-records.com', name: 'Elections', confirmed: 0, return_days: 0, early_release_bps: 0, commission_bps: 1000, refer_bps: 300, discount_allowed: 1, max_discount_bps: 500 },
+  { id: 'el', host: 'elections.townhall-records.com', name: 'Elections', confirmed: 0, return_days: 0, early_release_bps: 0, commission_bps: 1000, refer_bps: 300, discount_allowed: 0, max_discount_bps: 0 },
   { id: 'mt', host: 'meetings.townhall-records.com', name: 'Meetings', confirmed: 0, return_days: 0, early_release_bps: 0, commission_bps: 1000, refer_bps: 300, discount_allowed: 0, max_discount_bps: 0 },
 ];
 

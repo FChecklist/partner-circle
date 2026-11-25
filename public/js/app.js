@@ -30,7 +30,7 @@
     if (Array.isArray(c)) return c.forEach(function (x) { add(el, x); });
     el.appendChild(typeof c === 'object' ? c : document.createTextNode(String(c)));
   }
-  var money = function (m) { return 'Rs ' + (Number(m || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  var money = function (m) { return '₹' + (Number(m || 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
   var when = function (t) { return t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '-'; };
   var day = function (t) { return t ? new Date(t).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : '-'; };
   var pill = function (t, cls) { return E('span', { class: 'pill' + (cls ? ' ' + cls : '') }, t); };
@@ -246,16 +246,26 @@
   };
 
   VIEWS.earn = function () {
-    return Promise.all([api('GET', '/v1/me/balance'), api('GET', '/v1/me/ledger'), api('GET', '/v1/me/payouts'), api('GET', '/v1/me/sales')]).then(function (r) {
-      var b = r[0], led = r[1].entries, po = r[2].payouts, sales = r[3].sales;
+    return Promise.all([api('GET', '/v1/me/balance'), api('GET', '/v1/me/ledger'), api('GET', '/v1/me/payouts'), api('GET', '/v1/me/sales'), api('GET', '/v1/me/summary'), api('GET', '/v1/public/sites')]).then(function (r) {
+      var b = r[0], led = r[1].entries, po = r[2].payouts, sales = r[3].sales, sm = r[4], sites = r[5];
+      var jb = sm.joining_bonus || { state: 'none' };
+      var bonusLine = {
+        open: 'Joining bonus: ' + money(jb.amount_minor) + ' comes with the first sale paid by ' + day(jb.expires_at) + '.',
+        earned: 'Joining bonus of ' + money(jb.amount_minor) + ' earned with the first sale.',
+        voided: 'The joining bonus went back together with the refunded first sale.',
+        gone: 'The joining bonus window has closed.',
+      }[jb.state];
       var open = po.some(function (p) { return ['pending_approval', 'approved', 'processing'].indexOf(p.status) >= 0; });
       return E('div', null, E('h1', null, 'Earnings and payouts'),
         E('div', { class: 'grid' }, card(E('div', { class: 'big' }, money(b.available_minor)), E('span', { class: 'mut' }, 'ready to be paid')), card(E('div', { class: 'big' }, money(b.pending_minor)), E('span', { class: 'mut' }, 'on hold')),
           card(E('div', { class: 'big' }, money(b.in_payout_minor)), E('span', { class: 'mut' }, 'in a payout')), card(E('div', { class: 'big' }, money(b.paid_minor)), E('span', { class: 'mut' }, 'paid so far'))),
         E('button', { class: 'btn', disabled: open || b.available_minor <= 0, on: { click: act(function () { return api('POST', '/v1/me/payouts'); }, 'Payout requested: waiting for approval') } }, 'Request payout'),
-        E('div', { class: 'note' }, 'Commission is held until the product refund window plus 7 days has passed and Razorpay has confirmed the payment: about 37 days for Veridian products and PROJEXA, 7 days for games and Townhall. Payouts need your verified e-mail and payout details.'),
-        E('h2', null, 'Payouts'), table(['Requested', 'Amount', 'After tax', 'Status', 'Paid to'], po.map(function (p) { return [when(p.created_at), money(p.gross_minor), money(p.net_minor), pill(p.status.replace('_', ' '), p.status === 'paid' ? '' : 'o'), p.destination_masked || '-']; })),
-        E('h2', null, 'Sales'), table(['Date', 'Product', 'Amount', 'Result', 'Payable from'], sales.map(function (s) { return [day(s.paid_at), s.site_id, money(s.net_minor), s.status === 'recorded' ? pill(s.rzp_status === 'confirmed' ? 'confirmed' : 'awaiting payment confirmation', s.rzp_status === 'confirmed' ? '' : 'o') : pill(s.status + (s.block_reason ? ': ' + s.block_reason : ''), 'r'), day(s.eligible_at)]; })),
+        E('div', { class: 'note' }, 'Commission is paid after the wait shown for each product, once Razorpay has confirmed the payment and no refund or claim is open. Payouts need a verified e-mail and verified payout details.'),
+        E('ul', { class: 'mut' }, sites.map(function (s) { return E('li', null, s.name + ': ' + s.payout_wait); })),
+        sm.next_pay_day ? E('div', { class: 'note' }, 'Payouts are made on fixed pay days. The next pay day is ' + day(sm.next_pay_day) + '.') : null,
+        bonusLine ? E('div', { class: 'note' }, bonusLine) : null,
+        E('h2', null, 'Payouts'), table(['Requested', 'Pay day', 'Amount', 'After tax', 'Status', 'Paid to'], po.map(function (p) { return [when(p.created_at), p.pay_on ? day(p.pay_on) : '-', money(p.gross_minor), money(p.net_minor), pill(p.status.replace('_', ' '), p.status === 'paid' ? '' : 'o'), p.destination_masked || '-']; })),
+        E('h2', null, 'Sales'), table(['Date', 'Product', 'Amount', 'Result', 'Payable from'], sales.map(function (s) { return [day(s.paid_at), s.site_id, money(s.net_minor), s.status === 'recorded' ? pill(s.rzp_status === 'confirmed' ? 'confirmed' : 'awaiting payment confirmation', s.rzp_status === 'confirmed' ? '' : 'o') : pill(s.status + (s.block_reason ? ': ' + s.block_reason : ''), 'r'), (s.early_release_bps ? day(s.early_eligible_at) + ' (' + (s.early_release_bps / 100) + '%), the rest ' + day(s.eligible_at) : day(s.eligible_at))]; })),
         E('h2', null, 'Ledger'), table(['#', 'When', 'Type', 'Amount', 'Note'], led.map(function (e) { return [String(e.seq), when(e.ts), e.kind, money(e.amount_minor), e.memo || '']; })));
     });
   };
@@ -325,7 +335,7 @@
       var q = r[0], s = r[1];
       var tile = function (big, label) { return card(E('div', { class: 'big' }, big), E('span', { class: 'mut' }, label)); };
       return E('div', null, E('h1', null, 'Approvals'),
-        s.payout_mode === 'mock' ? E('div', { class: 'note' }, 'Payouts are in MOCK mode: no real money moves. Live payouts need your RazorpayX keys and PAYOUT_MODE=live.') : E('div', { class: 'note' }, 'Payout mode: ' + s.payout_mode + '. Approving a payout sends it to RazorpayX.'),
+        s.payout_mode === 'mock' ? E('div', { class: 'note' }, 'Payouts are in MOCK mode: no real money moves. Live payouts need the Razorpay payout keys and PAYOUT_MODE=live.') : E('div', { class: 'note' }, 'Payout mode: ' + s.payout_mode + '. Approving a payout sends it to Razorpay.'),
         q.tds_confirmed ? null : E('div', { class: 'note' }, 'TDS rate is not confirmed by a CA yet. Payouts carry the TDS % set under Policy and sites (now a placeholder).'),
         E('div', { class: 'grid' }, tile(String(q.partners.length), 'people to approve'), tile(String(q.payouts.length), 'payouts waiting'),
           tile(money(s.owed_minor), 'owed to partners (ledger)'), tile(String(s.open_claims), 'claims on hold')),
@@ -336,9 +346,10 @@
         E('h2', null, 'Payout details to check'), table(['Name', 'Details', 'Submitted', ''], q.kyc.map(function (k) { return [k.name, kycCell(k), day(k.submitted_at),
           ownerOnly(E('span', null, post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: true }, { label: 'Verify', done: 'Verified' }), ' ',
             post('/v1/admin/users/' + k.user_id + '/kyc/review', { approve: false, note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' })))]; })),
-        E('h2', null, 'Payouts waiting'), table(['Partner', 'Pay to', 'Gross', 'TDS', 'To pay', 'Flags', ''], q.payouts.map(function (p) { return [p.name, (p.method === 'upi' ? 'UPI ' : 'Bank ') + (p.destination_masked || '-'), money(p.gross_minor), money(p.tds_minor), money(p.net_minor),
+        E('h2', null, 'Payouts waiting'), table(['Partner', 'Pay to', 'Gross', 'TDS', 'To pay', 'Pay day', 'Flags', ''], q.payouts.map(function (p) { return [p.name, (p.method === 'upi' ? 'UPI ' : 'Bank ') + (p.destination_masked || '-'), money(p.gross_minor), money(p.tds_minor), money(p.net_minor), p.pay_on ? day(p.pay_on) : '-',
           p.flagged_refunds ? pill(p.flagged_refunds + ' refunded after sale', 'r') : '',
           ownerOnly(E('span', null, post('/v1/admin/payouts/' + p.id + '/approve', undefined, { label: 'Approve', done: 'Approved and sent to the payout provider' }), ' ',
+            p.pay_on && p.pay_on > Date.now() ? post('/v1/admin/payouts/' + p.id + '/approve', { early: true }, { label: 'Approve early', cls: 'ghost', done: 'Approved early and sent' }, 'This is before the pay day (' + day(p.pay_on) + '). Send it now?') : null, ' ',
             post('/v1/admin/payouts/' + p.id + '/reject', { note: 'rejected in console' }, { label: 'Reject', cls: 'ghost', done: 'Rejected' })))]; })),
         E('h2', null, 'Claims on hold'), table(['Partner', 'Product', 'Order', 'Amount', 'Since', ''], q.claims.map(function (c) { return [c.name || '-', c.site_id, c.order_id, money(c.net_minor), day(c.disputed_at),
           ownerOnly(E('span', null, post('/v1/admin/sales/' + c.id + '/claim', { action: 'won', note: 'cleared in console' }, { label: 'Claim cleared', done: 'Released' }), ' ',
@@ -410,6 +421,7 @@
   VIEWS.policy = function () {
     return Promise.all([api('GET', '/v1/admin/policy'), api('GET', '/v1/admin/sites')]).then(function (r) {
       var p = r[0], sites = r[1].sites;
+      var bonus = E('input', { type: 'number', value: (p.joining_bonus_minor || 0) / 100 }), bonusDays = E('input', { type: 'number', value: p.joining_bonus_valid_days || 30 }), payDays = E('input', { value: (p.pay_days || []).join(', ') });
       var min = E('input', { type: 'number', value: p.min_payout_minor / 100 }), win = E('input', { type: 'number', value: p.attribution_window_days }), tds = E('input', { type: 'number', step: '0.1', value: p.tds_bps_default / 100 });
       var tdsOk = E('input', { type: 'checkbox', class: 'auto' }); tdsOk.checked = !!p.tds_confirmed;
       var ov = {}; ['exec', 'leader', 'manager'].forEach(function (k) { ov[k] = E('input', { type: 'number', step: '0.05', value: p.override_bps[k] / 100 }); });
@@ -417,35 +429,35 @@
       var sel = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name + (s.active ? '' : ' (off)')); }));
       var f = {
         host: E('input'), commission: E('input', { type: 'number', step: '0.1' }), refer: E('input', { type: 'number', step: '0.1' }), ret: E('input', { type: 'number' }), buf: E('input', { type: 'number' }),
-        disc: E('input', { type: 'number', step: '0.1' }), refund: E('textarea', { rows: '3' }),
+        early: E('input', { type: 'number', step: '0.1' }), disc: E('input', { type: 'number', step: '0.1' }), refund: E('textarea', { rows: '3' }),
         discOn: E('input', { type: 'checkbox', class: 'auto' }), confirmed: E('input', { type: 'checkbox', class: 'auto' }), active: E('input', { type: 'checkbox', class: 'auto' }),
       };
       var cur = function () { return sites.filter(function (s) { return s.id === sel.value; })[0]; };
       var fill = function () {
         var s = cur();
-        f.host.value = s.host; f.commission.value = s.commission_bps / 100; f.refer.value = s.refer_bps / 100; f.ret.value = s.return_days; f.buf.value = s.buffer_days;
+        f.host.value = s.host; f.commission.value = s.commission_bps / 100; f.refer.value = s.refer_bps / 100; f.ret.value = s.return_days; f.buf.value = s.buffer_days; f.early.value = (s.early_release_bps || 0) / 100;
         f.disc.value = s.max_discount_bps / 100; f.refund.value = s.refund_terms || ''; f.discOn.checked = !!s.discount_allowed; f.confirmed.checked = !!s.host_confirmed; f.active.checked = !!s.active;
       };
       sel.addEventListener('change', fill); fill();
       return E('div', null, E('h1', null, 'Policy and sites'),
         card(E('b', null, 'Global rules'), isOwner() ? null : E('p', { class: 'mut' }, 'Read only: policy changes are owner-only.'),
-          field('Minimum payout (Rs)', min), field('Attribution window (days)', win), field('TDS % at payout (placeholder until a CA confirms)', tds),
+          field('Minimum payout (₹)', min), field('Pay days of the month (the last day is written as 31)', payDays), field('Joining bonus (₹, 0 = none)', bonus), field('Joining bonus valid for (days after approval)', bonusDays), field('Attribution window (days)', win), field('TDS % at payout (placeholder until a CA confirms)', tds),
           E('label', null, tdsOk, ' A CA has confirmed this TDS rate'),
           field('Override % to executive / team leader / manager on team sales', E('div', { class: 'grid' }, ov.exec, ov.leader, ov.manager)),
           E('p', { class: 'mut' }, 'Partner links may only send visitors to: ' + p.owned_domains.join(', ')),
           isOwner() ? E('button', { class: 'btn', on: { click: act(function () {
-            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100), tds_confirmed: tdsOk.checked,
+            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), pay_days: payDays.value.split(',').map(function (x) { return Number(x.trim()); }).filter(function (x) { return x > 0; }), joining_bonus_minor: Math.round(bonus.value * 100), joining_bonus_valid_days: Number(bonusDays.value), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100), tds_confirmed: tdsOk.checked,
               override_bps: { exec: Math.round(ov.exec.value * 100), leader: Math.round(ov.leader.value * 100), manager: Math.round(ov.manager.value * 100) } });
           }, 'Policy saved') } }, 'Save') : null),
         E('h2', null, 'Sites'),
-        table(['Site', 'Refund window', 'Commission', 'Refer', 'Max discount', 'Status'], sites.map(function (s) { return [s.name + ' (' + s.host + ')', s.return_days + ' + ' + s.buffer_days + ' days', (s.commission_bps / 100) + '%', (s.refer_bps / 100) + '%', s.discount_allowed ? (s.max_discount_bps / 100) + '%' : 'none',
+        table(['Site', 'Refund window', 'Paid early', 'Commission', 'Refer', 'Max discount', 'Status'], sites.map(function (s) { return [s.name + ' (' + s.host + ')', s.return_days + ' + ' + s.buffer_days + ' days', s.early_release_bps ? (s.early_release_bps / 100) + '% after ' + s.buffer_days + ' days' : 'no split', (s.commission_bps / 100) + '%', (s.refer_bps / 100) + '%', s.discount_allowed ? (s.max_discount_bps / 100) + '%' : 'none',
           s.active ? pill('live') : pill(s.host_confirmed ? 'off' : 'host not confirmed', 'o')]; })),
         isOwner() ? card(E('b', null, 'Edit a site'), E('p', { class: 'mut' }, 'Changes apply to future sales only. A site goes live only after you confirm its host.'), field('Site', sel), field('Host (must be on an owned domain)', f.host),
-          E('div', { class: 'grid' }, field('Commission %', f.commission), field('Refer and Earn %', f.refer), field('Refund window (days)', f.ret), field('Buffer (days)', f.buf)),
+          E('div', { class: 'grid' }, field('Commission %', f.commission), field('Refer and Earn %', f.refer), field('Refund window (days)', f.ret), field('Buffer (days)', f.buf), field('Paid early after the buffer, % of each commission (0 = no split)', f.early)),
           E('label', null, f.discOn, ' Discount codes allowed'), field('Max discount %', f.disc), field('Refund terms shown to buyers before they pay (blank = draft default)', f.refund),
           E('label', null, f.confirmed, ' I confirm this host is right'), E('label', null, f.active, ' Site is live'),
           E('p', null, E('button', { class: 'btn', on: { click: act(function () {
-            return api('PATCH', '/v1/admin/sites/' + sel.value, { host: f.host.value.trim(), commission_bps: Math.round(f.commission.value * 100), refer_bps: Math.round(f.refer.value * 100), return_days: Number(f.ret.value), buffer_days: Number(f.buf.value),
+            return api('PATCH', '/v1/admin/sites/' + sel.value, { host: f.host.value.trim(), commission_bps: Math.round(f.commission.value * 100), refer_bps: Math.round(f.refer.value * 100), return_days: Number(f.ret.value), buffer_days: Number(f.buf.value), early_release_bps: Math.round(f.early.value * 100),
               discount_allowed: f.discOn.checked ? 1 : 0, max_discount_bps: Math.round(f.disc.value * 100), refund_terms: f.refund.value.trim() || null, host_confirmed: f.confirmed.checked ? 1 : 0, active: f.active.checked ? 1 : 0 });
           }, 'Site saved') } }, 'Save site'))) : E('p', { class: 'mut' }, 'Site rates are edited by the owner.'));
     });

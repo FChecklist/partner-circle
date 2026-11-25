@@ -2,6 +2,19 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.7 - 25 Nov 2026
+Money rules rechecked against the owner's decisions (full table: `docs/MONEY-RULES-RECHECK-2026-11-25.md`). Money stays OFF; migration 0007 is a draft the owner applies after the audits.
+- Minimum payout is 500 rupees (was 1,000).
+- Money-back products pay 80% of each commission after 7 days and the last 20% after 37 (new `sites.early_release_bps`). A refund cancels both parts, or only the unsent part when the first was already sent.
+- Pay days: a payout waits for the 15th or the last day of the month; the owner can approve early on purpose, and it is logged.
+- Joining bonus of 500 rupees with the first sale, if that sale is paid within 30 days of approval. Once per person. A refund of that sale takes it back.
+- Team share is OFF until the owner decides. Corporate Tambola pays 25% to Growth Partners and to Refer and Earn. No discount codes on the games and Townhall products.
+- The payee name is read from the payee record (`tenant_profile.payee_name`), no longer typed into the pages. Screens say Razorpay, not RazorpayX, and use the rupee sign. Each product shows its own payout wait.
+- Moneypenny: each part of a split sale and the bonus is its own credit with its own sale reference.
+- Owner queue counts flagged sales, not the ledger parts of one sale.
+- Dashboard design and API contract written (`docs/DASHBOARD-OVER-MONEYPENNY-AND-MONOPOLY.md`) with a test that compares it with the real answer.
+- Added a CI workflow (`.github/workflows/ci.yml`): build and tests on Node 22 and 24.
+
 ## 1.0.6 - 23 Nov 2026
 - Site calls are now signed over time, method, path and body, so a signed sale cannot be replayed against another endpoint (sites must update their signing line; see docs/INTEGRATION.md).
 - Razorpay events are de-duplicated by the event type and entity id inside the signed body, not by a header anyone could change.

@@ -80,9 +80,14 @@ await fetch('https://PC/v1/integration/sales', { method: 'POST', body, headers: 
 
 Attribution order: discount code, then a prospect the partner registered (protected 14 days), then click id (30-day window),
 then an earlier sign-up. A buyer whose e-mail matches the partner's own is blocked as self-referral (no commission).
-Commission is posted to the ledger at once but is **payable only when** (a) `paid_at + refund window + 7 days` has passed
-(37 days for `dpdp mom aios projexa`, 7 days for `tam voter th el mt`) **and** (b) Razorpay's own `payment.captured` webhook
-confirmed the same payment id and amount.
+Commission is posted to the ledger at once but is **payable only when** (a) the wait has passed and (b) Razorpay's own
+`payment.captured` webhook confirmed the same payment id and amount. The wait is per product:
+`tam voter th el mt` (no money-back window) pay everything 7 days after the sale; `dpdp mom aios projexa` (30 money-back days)
+pay 80% after 7 days and the last 20% after 37 days (`sites.early_release_bps`, so the commission is two ledger entries).
+A partner's first sale within 30 days of approval also carries the joining bonus (a third entry, payable with the last part).
+Payouts are then made on the pay days of the month (the 15th and the last day). The response of `POST /v1/integration/sales`
+carries `early_release_bps`, `early_eligible_at`, `eligible_at`, `commission_minor` and `bonus_minor`; `GET /v1/public/sites`
+carries a plain `payout_wait` sentence per product.
 
 ## 6. Refund (server -> PC, signed the same way)
 
@@ -90,8 +95,8 @@ confirmed the same payment id and amount.
 POST /v1/integration/refunds
 {"order_id":"MOM-10432","reason":"unused within 30 days","usage_verified":false}
 ```
-Before payout the commission and overrides are voided. After a payout the money is **not** clawed back (owner policy);
-the sale is flagged for the owner. Refunds are the site's decision: PC records them. Refund only for users who really used
+Before payout every part of the commission, the overrides and the joining bonus of that sale are voided. After a payout the part
+that was sent is **not** clawed back (owner policy) and the sale is flagged for the owner; a part not sent yet is still voided. Refunds are the site's decision: PC records them. Refund only for users who really used
 the product (daily use or complete end-to-end use cases), and show the condition before payment.
 
 ## 7. Idempotency, limits

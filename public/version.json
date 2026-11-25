@@ -1,10 +1,11 @@
 {
   "product": "Partner Circle",
-  "version": "1.0.6",
-  "releasedAt": "2026-11-23T08:38:33Z",
-  "releasedAtIST": "23 Nov 2026 14:08 IST",
+  "version": "1.0.7",
+  "releasedAt": "2026-11-25T05:03:00Z",
+  "releasedAtIST": "25 Nov 2026 10:33 IST",
   "commit": "0c792e77b478830647268bb8e81c978bf29f9508",
   "changes": [
+    "1.0.7: money rules rechecked (minimum 500 rupees, 80/20 split for money-back products, pay days 15 and last day, joining bonus, team share off, Corporate Tambola 25%, payee read from record, rupee sign); dashboard contract",
     "1.0.6: site signature covers method and path; Razorpay dedupe from signed body; privacy retention lines; small fixes",
     "1.0.5: no tick box or accept button at sign-up (plain Terms and Privacy links); privacy notice 2026-11-23; footer time now true IST; terms page",
     "1.0.4: grievance officer contact line added to the footer and privacy page (plain text)",

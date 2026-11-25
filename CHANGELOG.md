@@ -9,6 +9,7 @@ Fixes after two more audits of 1.0.8 (build e49c50a7; not deployed yet).
 - The wording guard has a second net that reads every code line of the shipped scripts without using the string reader, so a possessive cannot hide behind a regex literal or a nested template; the string reader itself is tested on those cases. The earlier note's "about 85 places" is the number of places that were changed, not a number left undone; both scans find none today.
 - No tick box: the scan now covers every script, page and style file under `public`, and a checkbox or radio set through `setAttribute`.
 - The payee: the default payee name read from the record appears in no shipped script, page or style (before, only one exact phrase was checked).
+- Two owner documents (`docs/OWNER-DECISIONS.md` item 10 and `docs/MONEY-RULES-RECHECK-2026-11-25.md` question 10) still said the wording sweep was open; they now say it was done in 1.0.8. The Terms page sentence about buying through a personal link reads plainly again.
 
 ## 1.0.8 - 25 Nov 2026
 Audit fixes on top of build 74141bad (this entry's commit is the one that applies the patch; `public/version.json` carries it once committed).

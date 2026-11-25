@@ -47,7 +47,7 @@ These are in the owner's v3 design but are new products, not rule corrections. T
 7. **Deal protection:** a registered prospect stays the seller's for 14 days here; the games count a click for 30 days (review item 10). Make it 30?
 8. **Payee name record.** The record starts as "IT Services by Rajat Agarwal". Confirm the exact spelling and capitals you want on the pages.
 9. **TDS.** Payouts still carry a placeholder 0% until a CA gives the rate.
-10. **Wording sweep.** The rule "no my, mine, your, yours in what people read" is not applied everywhere: about 85 places in the screens, notices and privacy page still use "your". Sweeping them touches many sentences and their tests; do you want it as one separate change?
+10. **Wording sweep.** The rule "no my, mine, your, yours in what people read" was not applied everywhere when this note was first written (about 85 places in the screens, notices and privacy page still used "your"). Done in 1.0.8: all of them were changed, and a scan test keeps it so.
 
 ## What was not checked
 

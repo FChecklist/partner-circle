@@ -26,5 +26,5 @@ The builder applied the decisions already given on 14 Nov (minimum 500 rupees, 8
 7. Deal protection: 14 days (built) or 30 days (the games' rule)?
 8. The exact spelling of the payee name on the pages (it is a record now: `PUT /v1/admin/tenant { "payee_name": ... }`).
 9. TDS rate (placeholder 0%) and the CA's answer.
-10. A separate pass to remove "my, mine, your, yours" from all screens and notices (about 85 places).
+10. Answered and done in 1.0.8: "my, mine, your, yours" were removed from all screens, notices and pages (about 85 places were changed). A scan test keeps it that way; only the one sentence "Copy this link and paste in your AI to work." stays, as decided. The privacy notice and the Terms page changed with it: please read those two once.
 - Gate: migration `0007_money_recheck.sql` (additive columns only) is applied by the owner after the audits pass, together with 0003-0006.

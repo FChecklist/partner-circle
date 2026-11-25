@@ -63,10 +63,12 @@
       Promise.resolve().then(fn).then(function () { if (okMsg) toast(okMsg); route(); }, function (e) { toast(e.message, true); });
     };
   }
+  /** A two-choice select: an explicit action instead of a tick box. value '1' = second choice. */
+  function yesNo(on, offText, onText) { var x = E('select', null, E('option', { value: '0' }, offText), E('option', { value: '1' }, onText)); x.value = on ? '1' : '0'; return x; }
   function field(label, input) { return E('div', null, E('label', null, label), input); }
 
   // ---- shell -----------------------------------------------------------------------------------------------
-  var USER_TABS = { dash: 'Dashboard', team: 'Team', links: 'Links and codes', earn: 'Earnings', profile: 'My details', logs: 'Logs' };
+  var USER_TABS = { dash: 'Dashboard', team: 'Team', links: 'Links and codes', earn: 'Earnings', profile: 'Details', logs: 'Logs' };
   var ADMIN_TABS = { queue: 'Approvals', payouts: 'Payouts', users: 'People', policy: 'Policy and sites', schemes: 'Schemes', suite: 'Suite', keys: 'API keys', audit: 'Action log', ai: 'AI actions' };
   var ROLE_NAME = { refer: 'Refer and Earn', partner: 'Growth Partner', exec: 'Sales Executive', leader: 'Sales Team Leader', manager: 'Sales Manager', owner: 'Owner', ai: 'AI master' };
 
@@ -104,15 +106,15 @@
   // ---- sign in / register ----------------------------------------------------------------------------------
   VIEWS.login = function () {
     var input = E('input', { id: 'k', placeholder: 'pck_…', autocomplete: 'off', spellcheck: 'false' });
-    var remember = E('input', { type: 'checkbox', class: 'auto' });
+    var remember = E('select', null, E('option', { value: 'session' }, 'Sign out when this page is closed'), E('option', { value: 'device' }, 'Stay signed in on this device'));
     return E('div', null,
       E('h1', null, 'Welcome to Partner Circle'),
       E('p', null, 'One place for every site we run: share, earn, grow.'),
-      card(E('b', null, 'Sign in with your key'), E('p', { class: 'mut' }, 'You received a key when you registered. It is shown only once; keep it safe.'),
-        field('Your key', input), E('label', null, remember, ' Remember on this device'),
+      card(E('b', null, 'Sign in with the key'), E('p', { class: 'mut' }, 'You received a key when you registered. It is shown only once; keep it safe.'),
+        field('Key', input), field('After signing in', remember),
         E('p', null, E('button', { class: 'btn', on: { click: function () {
           var k = input.value.trim(); if (!/^pck_[0-9a-f]+\.[0-9a-f]+$/.test(k)) return toast('That does not look like a key.', true);
-          state.key = k; try { (remember.checked ? localStorage : sessionStorage).setItem(KEYSTORE, k); } catch (e) { /* ignore */ }
+          state.key = k; try { (remember.value === 'device' ? localStorage : sessionStorage).setItem(KEYSTORE, k); } catch (e) { /* ignore */ }
           route();
         } } }, 'Sign in'))),
       card(E('b', null, 'New here?'), E('p', { class: 'mut' }, 'Join as a Growth Partner, or as a Refer and Earn member (no e-mail needed to start sharing).'),
@@ -126,17 +128,17 @@
     var q = (location.hash.split('sponsor=')[1] || '').replace(/[^a-z0-9]/gi, ''); if (q) sponsor.value = q;
     return E('div', null, E('h1', null, 'Join Partner Circle'),
       card(field('I want to join as', role), field('Full name', name), field('E-mail', email), field('Mobile number', phone), field('Sponsor code (if someone invited you)', sponsor),
-        E('p', { class: 'mut' }, 'We keep your name, e-mail and mobile number to run your account, track your sales and pay you. We share your name and e-mail with Moneypenny and Corporate Monopoly so you do not need a second login, and payout details (kept encrypted) with Razorpay when you are paid. You can see your data, rotate your key or ask for erasure from your account. Read the full privacy notice at /privacy.html.'),
+        E('p', { class: 'mut' }, 'We keep the name, e-mail and mobile number to run the account, track sales and pay the partner. We share the name and e-mail with Moneypenny and Corporate Monopoly so you do not need a second login, and payout details (kept encrypted) with Razorpay when you are paid. The data can be seen, the key rotated or erasure asked for from the account. Read the full privacy notice at /privacy.html.'),
         E('p', { class: 'mut' }, 'You can read our ', E('a', { href: '/terms.html', target: '_blank', rel: 'noopener' }, 'Terms and Conditions'), ' and ', E('a', { href: '/privacy.html', target: '_blank', rel: 'noopener' }, 'Privacy notice'), ' at any time.'),
         E('button', { class: 'btn', on: { click: function () {
           var body = { role: role.value, name: name.value, email: email.value || undefined, phone: phone.value || undefined, sponsor: sponsor.value || undefined };
           api('POST', '/v1/register', body).then(function (r) {
             out.textContent = '';
-            out.appendChild(card(E('b', null, 'You are in. Save your key now.'), E('p', { class: 'mut' }, 'This is your login. It is shown only once.'), E('div', { class: 'code' }, r.api_key),
-              E('p', { class: 'mut' }, r.user.status === 'pending' ? 'Your request is with the team; your links appear once you are approved.' : 'You can start sharing right away.'),
+            out.appendChild(card(E('b', null, 'You are in. Save the key now.'), E('p', { class: 'mut' }, 'This is the login. It is shown only once.'), E('div', { class: 'code' }, r.api_key),
+              E('p', { class: 'mut' }, r.user.status === 'pending' ? 'The request is with the team; links appear once it is approved.' : 'You can start sharing right away.'),
               E('button', { class: 'btn alt', on: { click: function () { state.key = r.api_key; try { sessionStorage.setItem(KEYSTORE, r.api_key); } catch (e) { /* ignore */ } location.hash = '#/'; route(); } } }, 'Continue')));
           }, function (e) { toast(e.message, true); });
-        } } }, 'Create my account'), out),
+        } } }, 'Create account'), out),
       E('p', null, E('a', { href: '#/' }, 'Back to sign in')));
   };
 
@@ -146,10 +148,10 @@
       var s = r[0], sch = r[1].schemes, me = r[2], b = s.balance, l = s.last_30_days, suite = r[3];
       var tile = function (big, label) { return card(E('div', { class: 'big' }, big), E('span', { class: 'mut' }, label)); };
       var nodes = [E('h1', null, 'Hello ' + (me.name || '')), E('p', { class: 'mut' }, ROLE_NAME[me.role] + (me.sponsor ? ' · sponsor: ' + me.sponsor.name : ''))];
-      if (me.status !== 'active') nodes.push(E('div', { class: 'note' }, 'Your account is waiting for approval. You can finish your details now.'));
-      if (!me.email_verified && me.role !== 'refer') nodes.push(E('div', { class: 'note' }, 'Verify your e-mail under My details; it is needed before your first payout.'));
+      if (me.status !== 'active') nodes.push(E('div', { class: 'note' }, 'The account is waiting for approval. Details can be finished now.'));
+      if (!me.email_verified && me.role !== 'refer') nodes.push(E('div', { class: 'note' }, 'Verify the e-mail under Details; it is needed before the first payout.'));
       nodes.push(E('div', { class: 'grid' }, tile(l.clicks, 'clicks, last 30 days'), tile(l.leads, 'sign-ups'), tile(l.sales, 'sales'), tile(money(l.net_minor), 'sales value')));
-      if (s.team_size) nodes.push(card(E('b', null, 'Your team'), E('p', null, s.team_size + ' people · team sales ' + money(l.team_net_minor) + ' in 30 days')));
+      if (s.team_size) nodes.push(card(E('b', null, 'The team'), E('p', null, s.team_size + ' people · team sales ' + money(l.team_net_minor) + ' in 30 days')));
       nodes.push(E('h2', null, 'Money'), E('div', { class: 'grid' }, tile(money(b.available_minor), 'ready to be paid'), tile(money(b.pending_minor), 'on hold (refund window)')));
       if (b.awaiting_razorpay_minor) nodes.push(E('div', { class: 'note' }, money(b.awaiting_razorpay_minor) + ' is waiting for the payment to be confirmed by Razorpay.'));
       if (suite) nodes.push(suiteWidgets(suite, me));
@@ -163,7 +165,7 @@
   // Moneypenny credits, Monopoly targets and achievements, and where commissions go. Everything is read through Partner Circle: no second login.
   function suiteWidgets(d, me) {
     var cur = d.brand.currency_label, mp = d.moneypenny, mo = d.monopoly, c = d.commissions;
-    var soft = function (st) { return st === 'live' ? null : E('p', { class: 'mut' }, st === 'stale' ? 'Showing the last numbers we saw; they refresh in a moment.' : st === 'setting_up' ? 'Your account is being set up here. Check again in a minute.' : st === 'not_connected' || st === 'off' ? 'Not switched on yet.' : 'Refreshing, back in a moment.'); };
+    var soft = function (st) { return st === 'live' ? null : E('p', { class: 'mut' }, st === 'stale' ? 'Showing the last numbers we saw; they refresh in a moment.' : st === 'setting_up' ? 'The account is being set up here. Check again in a minute.' : st === 'not_connected' || st === 'off' ? 'Not switched on yet.' : 'Refreshing, back in a moment.'); };
     var nodes = [E('h2', null, cur + ' (credits)')];
     if (mp.lines) {
       var body = [E('div', { class: 'big' }, mp.credits.toLocaleString('en-IN')), E('span', { class: 'mut' }, mp.lines.owned), E('p', { class: 'mut' }, mp.lines.rate)];
@@ -184,7 +186,7 @@
     else nodes.push(card(E('p', { class: 'mut' }, mo.status === 'live' || mo.status === 'stale' ? 'No targets set for you yet.' : 'Targets appear here once they are connected.'), soft(mo.status === 'live' ? 'live' : mo.status)));
     var a = mo.achievements || { badges: [] };
     if (a.level != null || (a.badges && a.badges.length)) nodes.push(card(E('b', null, 'Level ' + (a.level == null ? '-' : a.level)), E('p', null, (a.badges || []).map(function (bd) { return pill(bd.name); }))));
-    if (c.destination === 'moneypenny') nodes.push(E('div', { class: 'note' }, 'Your matured commissions are paid to you as ' + cur + '. Sent so far: ' + money(c.sent_to_moneypenny_minor) + (c.on_the_way_to_moneypenny_minor ? ' · on the way: ' + money(c.on_the_way_to_moneypenny_minor) : '') + '.'));
+    if (c.destination === 'moneypenny') nodes.push(E('div', { class: 'note' }, 'Matured commissions are paid as ' + cur + '. Sent so far: ' + money(c.sent_to_moneypenny_minor) + (c.on_the_way_to_moneypenny_minor ? ' · on the way: ' + money(c.on_the_way_to_moneypenny_minor) : '') + '.'));
     return E('div', null, nodes);
   }
   function bar(p) { return E('div', { class: 'bar' }, E('i', { class: p >= 80 ? 'g' : p >= 40 ? 'a' : 'r', style: { width: Math.max(0, Math.min(100, Number(p) || 0)) + '%' } })); }
@@ -212,7 +214,7 @@
 
   VIEWS.team = function () {
     return api('GET', '/v1/me/team').then(function (r) {
-      return E('div', null, E('h1', null, 'My team'), E('p', { class: 'mut' }, 'Everyone who reports up to you.'),
+      return E('div', null, E('h1', null, 'Team'), E('p', { class: 'mut' }, 'Everyone who reports up to this partner.'),
         table(['Name', 'Role', 'Level', 'Status'], r.members.map(function (m) { return [m.name, ROLE_NAME[m.role], String(m.depth), pill(m.status, m.status === 'active' ? '' : 'o')]; })));
     });
   };
@@ -223,16 +225,16 @@
       var site = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name); }));
       var path = E('input', { value: '/', placeholder: '/' });
       var origin = location.origin;
-      var nodes = [E('h1', null, 'My links' + (me.role === 'refer' ? '' : ' and codes')), E('p', { class: 'mut' }, 'One personal link per product and page. Every click is logged.'),
+      var nodes = [E('h1', null, 'Links' + (me.role === 'refer' ? '' : ' and codes')), E('p', { class: 'mut' }, 'One personal link per product and page. Every click is logged.'),
         card(field('Product', site), field('Page on that site', path), E('button', { class: 'btn', on: { click: act(function () { return api('POST', '/v1/me/links', { site_id: site.value, path: path.value }); }, 'Link ready') } }, 'Create link')),
-        E('h2', null, 'My links'),
+        E('h2', null, 'Links'),
         table(['Product', 'Link', 'Clicks'], links.map(function (l) { return [l.site_name + ' ' + l.path, E('span', { class: 'code' }, origin + l.url), String(l.clicks)]; }))];
       if (me.role !== 'refer') {
         var cs = E('select', null, sites.filter(function (s) { return s.discount_allowed; }).map(function (s) { return E('option', { value: s.id }, s.name + ' (max ' + (s.max_discount_bps / 100) + '%)'); }));
         var pctIn = E('input', { type: 'number', min: '0.5', step: '0.5', value: '5' }), uses = E('input', { type: 'number', min: '1', value: '3' });
         nodes.push(E('h2', null, 'Create a discount code'), card(E('p', { class: 'mut' }, 'Only products that allow discounts are listed.'), field('Product', cs), field('Discount %', pctIn), field('Number of uses', uses),
           E('button', { class: 'btn alt', on: { click: act(function () { return api('POST', '/v1/me/codes', { site_id: cs.value, discount_bps: Math.round(Number(pctIn.value) * 100), max_uses: Number(uses.value) }); }, 'Code created') } }, 'Create code')),
-          E('h2', null, 'My codes'),
+          E('h2', null, 'Codes'),
           table(['Code', 'Off', 'Used', 'Expires', ''], codes.map(function (c) { return [E('span', { class: 'code' }, c.code), (c.discount_bps / 100) + '%', c.used_count + ' / ' + c.max_uses, day(c.expires_at),
             c.active ? E('button', { class: 'btn ghost', on: { click: act(function () { return api('DELETE', '/v1/me/codes/' + c.code); }, 'Code switched off') } }, 'Switch off') : pill('off', 'o')]; })));
         var ps = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name); })), pe = E('input', { type: 'email', placeholder: 'their e-mail' });
@@ -251,7 +253,7 @@
       var jb = sm.joining_bonus || { state: 'none' };
       var bonusLine = {
         open: 'Joining bonus: ' + money(jb.amount_minor) + ' comes with the first sale paid by ' + day(jb.expires_at) + '.',
-        earned: 'Joining bonus of ' + money(jb.amount_minor) + ' earned with the first sale.',
+        earned: 'Joining bonus of ' + money(jb.amount_minor) + ' earned with the first sale.' + (jb.held ? ' It is held until it is eligible on ' + day(jb.eligible_at) + '.' : ' It is eligible now.'),
         voided: 'The joining bonus went back together with the refunded first sale.',
         gone: 'The joining bonus window has closed.',
       }[jb.state];
@@ -277,7 +279,7 @@
       var pan = E('input', { placeholder: 'ABCDE1234F', maxlength: '10' }), upi = E('input', { placeholder: 'name@bank' });
       var tax = E('input'), acct = E('input'), ifsc = E('input'), bank = E('input');
       var email = E('input', { type: 'email', placeholder: 'you@example.com' });
-      return E('div', null, E('h1', null, 'My details'),
+      return E('div', null, E('h1', null, 'Details'),
         card(E('div', { class: 'row' }, E('b', null, 'E-mail'), me.email_verified ? pill('verified') : pill('not verified', 'o')), E('p', null, me.email_masked || 'none yet'),
           field('Add or change e-mail', email), E('button', { class: 'btn ghost', on: { click: act(function () { return api('PATCH', '/v1/me', { email: email.value }); }, 'E-mail saved') } }, 'Save e-mail'),
           me.email_masked && !me.email_verified ? E('div', null, E('p', null, E('button', { class: 'btn', on: { click: act(function () { return api('POST', '/v1/me/email/send-code'); }, 'Code sent') } }, 'Send me a code')), field('Code', code),
@@ -289,19 +291,19 @@
           E('button', { class: 'btn', disabled: !me.email_verified, on: { click: act(function () {
             return api('PUT', '/v1/me/kyc', india ? { pan: pan.value, upi_id: upi.value } : { tax_id: tax.value, bank_account: acct.value, bank_ifsc_swift: ifsc.value, bank_name: bank.value });
           }, 'Details submitted for checking') } }, 'Submit for checking'),
-          me.email_verified ? null : E('p', { class: 'mut' }, 'Verify your e-mail first.')),
-        card(E('b', null, 'Your data and privacy'), E('p', { class: 'mut' }, 'See what we hold about you, rotate your key if you think it leaked, or ask for erasure. Read the privacy notice at /privacy.html.'),
+          me.email_verified ? null : E('p', { class: 'mut' }, 'Verify the e-mail first.')),
+        card(E('b', null, 'Data and privacy'), E('p', { class: 'mut' }, 'See what we hold, rotate the key if it may have leaked, or ask for erasure. Read the privacy notice at /privacy.html.'),
           E('p', null,
-            E('button', { class: 'btn ghost', on: { click: act(function () { return api('GET', '/v1/me/export').then(function (d) { var a = E('a', { href: URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })), download: 'my-partner-circle-data.json' }); document.body.appendChild(a); a.click(); a.remove(); }); }, 'Your data was downloaded') } }, 'Download my data'), ' ',
-            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/me/keys/rotate').then(function (r) { state.key = r.api_key; try { (localStorage.getItem(KEYSTORE) ? localStorage : sessionStorage).setItem(KEYSTORE, r.api_key); } catch (e) { /* storage unavailable */ } window.prompt('Your NEW key (copy it now, the old one no longer works):', r.api_key); }); }, 'Key rotated') } }, 'Rotate my key'), ' ',
+            E('button', { class: 'btn ghost', on: { click: act(function () { return api('GET', '/v1/me/export').then(function (d) { var a = E('a', { href: URL.createObjectURL(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })), download: 'partner-circle-data.json' }); document.body.appendChild(a); a.click(); a.remove(); }); }, 'The data was downloaded') } }, 'Download data'), ' ',
+            E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/me/keys/rotate').then(function (r) { state.key = r.api_key; try { (localStorage.getItem(KEYSTORE) ? localStorage : sessionStorage).setItem(KEYSTORE, r.api_key); } catch (e) { /* storage unavailable */ } window.prompt('The NEW key (copy it now, the old one no longer works):', r.api_key); }); }, 'Key rotated') } }, 'Rotate the key'), ' ',
             E('button', { class: 'btn ghost', on: { click: act(function () { return api('POST', '/v1/me/erase-request'); }, 'Erasure requested; the owner will contact you') } }, 'Ask for erasure'))),
-        card(E('b', null, 'Invite someone to your team'), E('p', { class: 'mut' }, 'Share this sponsor code; they enter it when registering:'), E('div', { class: 'code' }, me.handle), E('p', { class: 'mut' }, 'or ' + location.origin + '/#/register?sponsor=' + me.handle)));
+        card(E('b', null, 'Invite someone to the team'), E('p', { class: 'mut' }, 'Share this sponsor code; they enter it when registering:'), E('div', { class: 'code' }, me.handle), E('p', { class: 'mut' }, 'or ' + location.origin + '/#/register?sponsor=' + me.handle)));
     });
   };
 
   VIEWS.logs = function () {
     return api('GET', '/v1/me/logs').then(function (r) {
-      return E('div', null, E('h1', null, 'Activity log'), E('p', { class: 'mut' }, 'Clicks, sign-ups, sales, payouts and your own actions.'),
+      return E('div', null, E('h1', null, 'Activity log'), E('p', { class: 'mut' }, 'Clicks, sign-ups, sales, payouts and own actions.'),
         table(['When', 'Type', 'What', 'Result'], r.logs.map(function (l) { return [when(l.ts), l.type, l.what || '', l.result || '']; })));
     });
   };
@@ -423,42 +425,42 @@
       var p = r[0], sites = r[1].sites;
       var bonus = E('input', { type: 'number', value: (p.joining_bonus_minor || 0) / 100 }), bonusDays = E('input', { type: 'number', value: p.joining_bonus_valid_days || 30 }), payDays = E('input', { value: (p.pay_days || []).join(', ') });
       var min = E('input', { type: 'number', value: p.min_payout_minor / 100 }), win = E('input', { type: 'number', value: p.attribution_window_days }), tds = E('input', { type: 'number', step: '0.1', value: p.tds_bps_default / 100 });
-      var tdsOk = E('input', { type: 'checkbox', class: 'auto' }); tdsOk.checked = !!p.tds_confirmed;
+      var tdsOk = yesNo(!!p.tds_confirmed, 'Placeholder: not yet confirmed by a CA', 'Confirmed by a CA');
       var ov = {}; ['exec', 'leader', 'manager'].forEach(function (k) { ov[k] = E('input', { type: 'number', step: '0.05', value: p.override_bps[k] / 100 }); });
 
       var sel = E('select', null, sites.map(function (s) { return E('option', { value: s.id }, s.name + (s.active ? '' : ' (off)')); }));
       var f = {
         host: E('input'), commission: E('input', { type: 'number', step: '0.1' }), refer: E('input', { type: 'number', step: '0.1' }), ret: E('input', { type: 'number' }), buf: E('input', { type: 'number' }),
         early: E('input', { type: 'number', step: '0.1' }), disc: E('input', { type: 'number', step: '0.1' }), refund: E('textarea', { rows: '3' }),
-        discOn: E('input', { type: 'checkbox', class: 'auto' }), confirmed: E('input', { type: 'checkbox', class: 'auto' }), active: E('input', { type: 'checkbox', class: 'auto' }),
+        discOn: yesNo(false, 'Discount codes not allowed', 'Discount codes allowed'), confirmed: yesNo(false, 'Site address not confirmed', 'Site address confirmed'), active: yesNo(false, 'Site is off', 'Site is live'),
       };
       var cur = function () { return sites.filter(function (s) { return s.id === sel.value; })[0]; };
       var fill = function () {
         var s = cur();
         f.host.value = s.host; f.commission.value = s.commission_bps / 100; f.refer.value = s.refer_bps / 100; f.ret.value = s.return_days; f.buf.value = s.buffer_days; f.early.value = (s.early_release_bps || 0) / 100;
-        f.disc.value = s.max_discount_bps / 100; f.refund.value = s.refund_terms || ''; f.discOn.checked = !!s.discount_allowed; f.confirmed.checked = !!s.host_confirmed; f.active.checked = !!s.active;
+        f.disc.value = s.max_discount_bps / 100; f.refund.value = s.refund_terms || ''; f.discOn.value = s.discount_allowed ? '1' : '0'; f.confirmed.value = s.host_confirmed ? '1' : '0'; f.active.value = s.active ? '1' : '0';
       };
       sel.addEventListener('change', fill); fill();
       return E('div', null, E('h1', null, 'Policy and sites'),
         card(E('b', null, 'Global rules'), isOwner() ? null : E('p', { class: 'mut' }, 'Read only: policy changes are owner-only.'),
           field('Minimum payout (₹)', min), field('Pay days of the month (the last day is written as 31)', payDays), field('Joining bonus (₹, 0 = none)', bonus), field('Joining bonus valid for (days after approval)', bonusDays), field('Attribution window (days)', win), field('TDS % at payout (placeholder until a CA confirms)', tds),
-          E('label', null, tdsOk, ' A CA has confirmed this TDS rate'),
+          field('TDS rate status', tdsOk),
           field('Override % to executive / team leader / manager on team sales', E('div', { class: 'grid' }, ov.exec, ov.leader, ov.manager)),
           E('p', { class: 'mut' }, 'Partner links may only send visitors to: ' + p.owned_domains.join(', ')),
           isOwner() ? E('button', { class: 'btn', on: { click: act(function () {
-            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), pay_days: payDays.value.split(',').map(function (x) { return Number(x.trim()); }).filter(function (x) { return x > 0; }), joining_bonus_minor: Math.round(bonus.value * 100), joining_bonus_valid_days: Number(bonusDays.value), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100), tds_confirmed: tdsOk.checked,
+            return api('PUT', '/v1/admin/policy', { min_payout_minor: Math.round(min.value * 100), pay_days: payDays.value.split(',').map(function (x) { return Number(x.trim()); }).filter(function (x) { return x > 0; }), joining_bonus_minor: Math.round(bonus.value * 100), joining_bonus_valid_days: Number(bonusDays.value), attribution_window_days: Number(win.value), tds_bps_default: Math.round(tds.value * 100), tds_confirmed: tdsOk.value === '1',
               override_bps: { exec: Math.round(ov.exec.value * 100), leader: Math.round(ov.leader.value * 100), manager: Math.round(ov.manager.value * 100) } });
           }, 'Policy saved') } }, 'Save') : null),
         E('h2', null, 'Sites'),
         table(['Site', 'Refund window', 'Paid early', 'Commission', 'Refer', 'Max discount', 'Status'], sites.map(function (s) { return [s.name + ' (' + s.host + ')', s.return_days + ' + ' + s.buffer_days + ' days', s.early_release_bps ? (s.early_release_bps / 100) + '% after ' + s.buffer_days + ' days' : 'no split', (s.commission_bps / 100) + '%', (s.refer_bps / 100) + '%', s.discount_allowed ? (s.max_discount_bps / 100) + '%' : 'none',
-          s.active ? pill('live') : pill(s.host_confirmed ? 'off' : 'host not confirmed', 'o')]; })),
-        isOwner() ? card(E('b', null, 'Edit a site'), E('p', { class: 'mut' }, 'Changes apply to future sales only. A site goes live only after you confirm its host.'), field('Site', sel), field('Host (must be on an owned domain)', f.host),
+          s.active ? pill('live') : pill(s.host_confirmed ? 'off' : 'address not confirmed', 'o')]; })),
+        isOwner() ? card(E('b', null, 'Edit a site'), E('p', { class: 'mut' }, 'Changes apply to future sales only. A site goes live only after its site address is confirmed.'), field('Site', sel), field('Site address (must be on an owned domain)', f.host),
           E('div', { class: 'grid' }, field('Commission %', f.commission), field('Refer and Earn %', f.refer), field('Refund window (days)', f.ret), field('Buffer (days)', f.buf), field('Paid early after the buffer, % of each commission (0 = no split)', f.early)),
-          E('label', null, f.discOn, ' Discount codes allowed'), field('Max discount %', f.disc), field('Refund terms shown to buyers before they pay (blank = draft default)', f.refund),
-          E('label', null, f.confirmed, ' I confirm this host is right'), E('label', null, f.active, ' Site is live'),
+          field('Discount codes', f.discOn), field('Max discount %', f.disc), field('Refund terms shown to buyers before they pay (blank = draft default)', f.refund),
+          field('Site address check', f.confirmed), field('Site status', f.active),
           E('p', null, E('button', { class: 'btn', on: { click: act(function () {
             return api('PATCH', '/v1/admin/sites/' + sel.value, { host: f.host.value.trim(), commission_bps: Math.round(f.commission.value * 100), refer_bps: Math.round(f.refer.value * 100), return_days: Number(f.ret.value), buffer_days: Number(f.buf.value), early_release_bps: Math.round(f.early.value * 100),
-              discount_allowed: f.discOn.checked ? 1 : 0, max_discount_bps: Math.round(f.disc.value * 100), refund_terms: f.refund.value.trim() || null, host_confirmed: f.confirmed.checked ? 1 : 0, active: f.active.checked ? 1 : 0 });
+              discount_allowed: Number(f.discOn.value), max_discount_bps: Math.round(f.disc.value * 100), refund_terms: f.refund.value.trim() || null, host_confirmed: Number(f.confirmed.value), active: Number(f.active.value) });
           }, 'Site saved') } }, 'Save site'))) : E('p', { class: 'mut' }, 'Site rates are edited by the owner.'));
     });
   };

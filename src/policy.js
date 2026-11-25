@@ -105,8 +105,9 @@ const pct = (bps) => `${Number((bps / 100).toFixed(2))}%`;
 export function payoutWaitText(site) {
   const final = holdDays(site);
   const early = earlyShareBps(site);
-  if (early) return `${pct(early)} is paid ${site.buffer_days} days after the sale and the rest after ${final} days, once the payment is confirmed.`;
-  return `Paid ${final} days after the sale, once the payment is confirmed.`;
+  const bonus = ' A joining bonus is held until it is eligible, like the commission on that first sale.';
+  if (early) return `${pct(early)} is paid ${site.buffer_days} days after the sale and the rest after ${final} days, once the payment is confirmed.${bonus}`;
+  return `Paid ${final} days after the sale, once the payment is confirmed.${bonus}`;
 }
 
 /**

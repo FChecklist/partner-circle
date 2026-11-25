@@ -65,8 +65,8 @@ export const payoutView = (p) => ({
 const dayLabel = (ts) => new Date(ts + 330 * 60000).toISOString().slice(0, 10);
 
 export async function requestPayout(ctx, user) {
-  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'your account is not active');
-  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify your e-mail before your first payout');
+  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'the account is not active');
+  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify the e-mail before the first payout');
   const kycRow = await ctx.db.first('SELECT status FROM user_kyc WHERE user_id=?', [user.id]);
   if (!kycRow || kycRow.status !== 'verified') throw new HttpError(409, 'kyc_required', 'payout details must be submitted and verified first');
   const policy = await getPolicy(ctx);
@@ -93,7 +93,7 @@ export async function requestPayout(ctx, user) {
       // re-select inside the builder: a refund / claim / hold that landed since the read above changes the set, and the request is refused (never built from a stale list)
       const now = await availableEntries(ctx, user.id);
       if (now.length !== entries.length || now.some((e, i) => e.seq !== entries[i].seq || e.amount_minor !== entries[i].amount_minor)) {
-        throw new HttpError(409, 'balance_changed', 'your balance changed while the request was being made; check it and ask again');
+        throw new HttpError(409, 'balance_changed', 'the balance changed while the request was being made; check it and ask again');
       }
       return [
       {
@@ -108,7 +108,7 @@ export async function requestPayout(ctx, user) {
     });
   } catch (e) {
     if (/one_open_payout|UNIQUE constraint failed: (payouts\.user_id|payout_items)/.test(String(e.message))) throw new HttpError(409, 'payout_open', 'a payout is already in progress');
-    if (/already posted to Moneypenny/.test(String(e.message))) throw new HttpError(409, 'balance_changed', 'part of your balance just moved to Moneypenny; check your balance and ask again');
+    if (/already posted to Moneypenny/.test(String(e.message))) throw new HttpError(409, 'balance_changed', 'part of the balance just moved to Moneypenny; check the balance and ask again');
     throw e;
   }
   return payoutView(await ctx.db.first('SELECT * FROM payouts WHERE id=?', [id]));
@@ -159,7 +159,7 @@ export async function rejectPayout(ctx, id, note) {
       ...(await auditStmts(ctx, [{ action: 'payout.reject', target: `payout:${id}`, meta: { note: note || null } }])),
     ];
   });
-  await notify(ctx, p.user_id, 'Your payout request was not approved', 'Your payout request was not approved this time. The money is back in your balance.');
+  await notify(ctx, p.user_id, 'The payout request was not approved', 'The payout request was not approved this time. The money is back in the balance.');
   return payoutView(await getPayout(ctx, id));
 }
 
@@ -237,7 +237,7 @@ export async function markPaid(ctx, id, utr) {
     { sql: "UPDATE payouts SET status='paid', paid_ref=?, paid_at=? WHERE id=? AND status IN ('processing','approved')", params: [utr || null, ctx.now(), id] },
     ...(await auditStmts(ctx, [{ action: 'payout.paid', target: `payout:${id}`, meta: { paid_ref: utr || null, gross_minor: p.gross_minor, net_minor: p.net_minor } }])),
   ]);
-  await notify(ctx, p.user_id, 'Your payout has been sent', `Your payout of ${(p.net_minor / 100).toFixed(2)} rupees has been sent${utr ? ` (reference ${utr})` : ''}.`);
+  await notify(ctx, p.user_id, 'The payout has been sent', `The payout of ${(p.net_minor / 100).toFixed(2)} rupees has been sent${utr ? ` (reference ${utr})` : ''}.`);
   return payoutView(await getPayout(ctx, id));
 }
 
@@ -266,7 +266,7 @@ export async function markFailed(ctx, id, reason, { reversal = false, definitive
     ...(await auditStmts(ctx, [{ action: wasPaid ? 'payout.reversed' : 'payout.failed', target: `payout:${id}`, meta: { reason: reason || null, was_paid: wasPaid } }])),
     ];
   });
-  await notify(ctx, p.user_id, 'Your payout could not be completed', 'Your payout could not be completed. The money is back in your balance and you can request it again.');
+  await notify(ctx, p.user_id, 'The payout could not be completed', 'The payout could not be completed. The money is back in the balance and a new payout can be requested.');
   return payoutView(await getPayout(ctx, id));
 }
 

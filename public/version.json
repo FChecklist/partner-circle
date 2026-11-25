@@ -1,10 +1,11 @@
 {
   "product": "Partner Circle",
-  "version": "1.0.7",
-  "releasedAt": "2026-11-25T05:03:00Z",
-  "releasedAtIST": "25 Nov 2026 10:33 IST",
-  "commit": "798c3fd9a19a57cb582e2a94f400028eedac6f2a",
+  "version": "1.0.8",
+  "releasedAt": "2026-11-25T09:00:00Z",
+  "releasedAtIST": "25 Nov 2026 14:30 IST",
+  "commit": "pending: the commit that applies this patch (set it when committing, as for 1.0.7)",
   "changes": [
+    "1.0.8: audit fixes: no my/your wording anywhere a person reads, no tick boxes (selects instead), joining bonus once by the database, held bonus text; commit 74141bad is the build this patch is on",
     "1.0.7: money rules rechecked (minimum 500 rupees, 80/20 split for money-back products, pay days 15 and last day, joining bonus, team share off, Corporate Tambola 25%, payee read from record, rupee sign); dashboard contract",
     "1.0.6: site signature covers method and path; Razorpay dedupe from signed body; privacy retention lines; small fixes",
     "1.0.5: no tick box or accept button at sign-up (plain Terms and Privacy links); privacy notice 2026-11-23; footer time now true IST; terms page",

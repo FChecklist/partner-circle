@@ -101,10 +101,13 @@ async function joiningBonusEntry(ctx, user, policy, { saleId, paidAt, eligibleAt
 export async function bonusStatus(ctx, user, policy) {
   if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role === 'refer') return { state: 'none' };
   const expires_at = user.approved_at + policy.joining_bonus_valid_days * DAY;
-  const row = await ctx.db.first('SELECT id FROM ledger WHERE ref=?', [`bonus:${user.id}`]);
+  const row = await ctx.db.first('SELECT id, eligible_at FROM ledger WHERE ref=?', [`bonus:${user.id}`]);
   let state = ctx.now() <= expires_at ? 'open' : 'gone';
   if (row) state = (await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [`void:${row.id}`])) ? 'voided' : 'earned';
-  return { state, amount_minor: policy.joining_bonus_minor, expires_at };
+  const out = { state, amount_minor: policy.joining_bonus_minor, expires_at };
+  // while the money is held (the wait period) the screen says so, with the date it becomes eligible
+  if (state === 'earned') { out.eligible_at = row.eligible_at; out.held = row.eligible_at > ctx.now(); }
+  return out;
 }
 
 export async function recordSale(ctx, site, body) {
@@ -170,10 +173,12 @@ export async function recordSale(ctx, site, body) {
   }
 
   const actorCtx = { ...ctx, actor: { type: 'site', id: site.id } };
-  try {
-    await atomic(ctx, async () => {
+  // The database decides who gets the joining bonus: ledger.ref is UNIQUE, so a second `bonus:<user>` row is refused. The SELECT in
+  // joiningBonusEntry is only a shortcut. If another writer got in between, the refusal means "already paid": the sale is written again without it.
+  let skipBonus = false;
+  const write = () => atomic(ctx, async () => {
       // The joining bonus is decided INSIDE the builder: two first sales landing together rebuild here and only one of them gets it.
-      const bonus = user && status === 'recorded' ? await joiningBonusEntry(ctx, user, policy, { saleId: id, paidAt: p.paid_at, eligibleAt: eligible }) : null;
+      const bonus = user && status === 'recorded' && !skipBonus ? await joiningBonusEntry(ctx, user, policy, { saleId: id, paidAt: p.paid_at, eligibleAt: eligible }) : null;
       summary.bonus_minor = bonus ? bonus.amount_minor : 0;
       return [
         {
@@ -188,7 +193,17 @@ export async function recordSale(ctx, site, body) {
           meta: { site_id: site.id, order_id: p.order_id, net_minor: net, attribution: attr.attribution, partner: user?.id ?? null, reason: blockReason, eligible_at: eligible,
             early_eligible_at: earlyEligible, early_release_bps: early, bonus_minor: summary.bonus_minor } }])),
       ];
-    });
+  });
+  try {
+    try {
+      await write();
+    } catch (e) {
+      const bonusRef = user && `bonus:${user.id}`;
+      if (!bonusRef || !/UNIQUE constraint failed: ledger\.ref/.test(String(e?.message)) || !(await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [bonusRef]))) throw e;
+      skipBonus = true;
+      summary.bonus_minor = 0;
+      await write();
+    }
   } catch (e) {
     if (attr.consumedCode) await ctx.db.run('UPDATE codes SET used_count = used_count - 1 WHERE id=? AND used_count > 0', [attr.consumedCode]);
     if (/UNIQUE constraint failed: sales\.site_id, sales\.order_id/.test(String(e.message))) {
@@ -227,7 +242,7 @@ async function cancelWaitingPayouts(ctx, saleId, why) {
 }
 
 const tellCancelled = (ctx, payouts) =>
-  Promise.all(payouts.map((p) => notify(ctx, p.user_id, 'Your payout request was cancelled', 'A sale in your payout request was refunded or put on hold, so the request was cancelled and the money is back in your balance. You can request a payout again.')));
+  Promise.all(payouts.map((p) => notify(ctx, p.user_id, 'The payout request was cancelled', 'A sale in the payout request was refunded or put on hold, so the request was cancelled and the money is back in the balance. A new payout can be requested.')));
 
 /**
  * Apply a refund. Commission not yet sent is voided. Commission already SENT to the partner (payout processing or paid) is NOT clawed

@@ -112,7 +112,7 @@ route('POST', '/v1/me/keys/rotate', { ...me, idem: false }, async ({ ctx, actor 
   const k = await createKey(ctx, { kind: 'user', user_id: actor.user.id, label: 'rotated by owner of the account', created_by: actor.keyId },
     { audit: (nk) => [{ action: 'key.rotate', target: `key:${nk.id}`, meta: { replaces: actor.keyId, user_id: actor.user.id } }] });
   await revokeKey(ctx, actor.keyId);
-  return { api_key: k.token, note: 'The old key no longer works. Store this one safely. If you did not do this yourself, tell the owner at once: whoever rotated may have had your old key.' };
+  return { api_key: k.token, note: 'The old key no longer works. Store this one safely. If you did not do this yourself, tell the owner at once: whoever rotated may have had the old key.' };
 });
 route('GET', '/v1/leaderboard', me, async ({ ctx, actor }) => ({
   // Anonymous: other members' names and handles are not shown (privacy, and handles let anyone pick a sponsor to poach). Only your own row is named.
@@ -279,7 +279,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const b = body || {};
   for (const [k, v] of Object.entries(b)) {
     if (!Object.hasOwn(rules, k)) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
-    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'host must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
+    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'the site address must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
     sets.push(`${k}=?`); vals.push(typeof v === 'string' ? v.trim() : v);
   }
   if (!sets.length) throw new HttpError(422, 'invalid_body', 'nothing to change');
@@ -287,7 +287,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const hostChanged = b.host !== undefined && b.host !== site.host;
   const confirmed = b.host_confirmed ?? (hostChanged ? 0 : site.host_confirmed);
   if (hostChanged && b.host_confirmed === undefined) { sets.push('host_confirmed=?'); vals.push(0); }
-  if (b.active === 1 && !confirmed) throw new HttpError(409, 'host_unconfirmed', 'confirm the host first (host_confirmed:1) before switching this site on');
+  if (b.active === 1 && !confirmed) throw new HttpError(409, 'host_unconfirmed', 'confirm the site address first (host_confirmed:1) before switching this site on');
   if (!confirmed && b.active === undefined && site.active === 1) { sets.push('active=?'); vals.push(0); }
   await atomic(ctx, async () => [
     { sql: `UPDATE sites SET ${sets.join(',')} WHERE id=?`, params: [...vals, params.id] },

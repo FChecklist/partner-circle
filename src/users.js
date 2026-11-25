@@ -122,7 +122,7 @@ export async function register(ctx, body) {
   const user = await createUser(ctx, { role, name, email, phone, country, sponsor, parent_id: null });
   const key = await createKey(ctx, { kind: 'user', user_id: user.id, label: 'self-service login', created_by: user.id },
     { audit: (k) => [{ action: 'key.issue', target: `key:${k.id}`, meta: { kind: 'user', user_id: user.id, via: 'self-registration' } }] });
-  return { user: publicUser(user), api_key: key.token, note: 'Save this key now: it is shown once and is your login.' };
+  return { user: publicUser(user), api_key: key.token, note: 'Save this key now: it is shown once and is the login.' };
 }
 
 export async function setStatus(ctx, userId, status, why) {
@@ -135,7 +135,7 @@ export async function setStatus(ctx, userId, status, why) {
     ...(await auditStmts(ctx, [{ action: `user.${status}`, target: `user:${userId}`, meta: { from: u.status, why: why || null } }])),
   ]);
   if (status === 'active' && u.status === 'pending') {
-    await notify(ctx, userId, 'You are approved on Partner Circle', 'Good news: your account is approved. You can now create links and start sharing.');
+    await notify(ctx, userId, 'You are approved on Partner Circle', 'Good news: the account is approved. You can now create links and start sharing.');
   }
   return { ...u, status };
 }
@@ -154,7 +154,7 @@ export async function sendEmailCode(ctx, user, rateLimit) {
   );
   try {
     // The unconfigured mailer throws 503 mail_not_configured, so a missing Resend setup is reported, never silently swallowed.
-    await ctx.mailer.send({ to: user.email, subject: 'Your Partner Circle verification code', text: `Your code is ${code}. It works for 15 minutes.`, _code: code });
+    await ctx.mailer.send({ to: user.email, subject: 'Partner Circle verification code', text: `The code is ${code}. It works for 15 minutes.`, _code: code });
   } catch (e) {
     await ctx.db.run('DELETE FROM email_codes WHERE user_id=?', [user.id]);
     throw e;
@@ -222,7 +222,7 @@ export async function updateProfile(ctx, user, body) {
 // ---- KYC ------------------------------------------------------------------------------------------------------
 
 export async function submitKyc(ctx, user, body) {
-  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify your e-mail before submitting payout details');
+  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify the e-mail before submitting payout details');
   // The destination of an open payout is frozen on the payout itself, but editing details while money is moving is never what a
   // real partner needs, and it is exactly what a thief with a stolen key would do. Wait until the payout is settled.
   if (await ctx.db.first("SELECT 1 AS x FROM payouts WHERE user_id=? AND status IN ('pending_approval','approved','processing')", [user.id])) {
@@ -256,7 +256,7 @@ export async function submitKyc(ctx, user, body) {
     },
     ...(await auditStmts(ctx, [{ action: 'kyc.submit', target: `user:${user.id}` }])),
   ]);
-  await notify(ctx, user.id, 'Your payout details were changed', 'New payout details were submitted on your Partner Circle account. If this was not you, reply to this e-mail straight away and rotate your key.');
+  await notify(ctx, user.id, 'Payout details were changed', 'New payout details were submitted on the Partner Circle account. If this was not done by the account holder, reply to this e-mail straight away and rotate the key.');
   return kycView(ctx, user.id);
 }
 

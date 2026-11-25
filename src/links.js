@@ -21,7 +21,7 @@ async function activeSite(ctx, siteId) {
 }
 
 export async function createLink(ctx, user, { site_id, path }) {
-  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'your account is not active yet');
+  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'the account is not active yet');
   const site = await activeSite(ctx, site_id);
   const p = safePath(path);
   const existing = await ctx.db.first('SELECT * FROM links WHERE user_id=? AND site_id=? AND path=? AND active=1', [user.id, site.id, p]);
@@ -72,7 +72,7 @@ export async function resolveLink(ctx, site, slug) {
 export async function createCode(ctx, user, body, { asAdmin = false, forUserId } = {}) {
   const owner = asAdmin ? await ctx.db.first("SELECT * FROM users WHERE id=? AND status='active'", [forUserId]) : user;
   if (!owner) throw new HttpError(404, 'not_found', 'code owner not found or not active');
-  if (owner.status !== 'active') throw new HttpError(403, 'not_active', 'your account is not active yet');
+  if (owner.status !== 'active') throw new HttpError(403, 'not_active', 'the account is not active yet');
   if (owner.role === 'refer') throw new HttpError(403, 'not_allowed', 'Refer and Earn members share links only; discount codes are for partners and sales staff');
   const site = await activeSite(ctx, body.site_id);
   if (!site.discount_allowed) throw new HttpError(403, 'discount_not_allowed', `${site.name} does not allow discount codes`);

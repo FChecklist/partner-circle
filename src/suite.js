@@ -165,10 +165,10 @@ export function moneypennyLines(prof, d) {
 const SOFT = {
   stale: 'Showing the last numbers we saw; they will refresh in a moment.',
   unavailable: 'This part is refreshing, back in a moment. Everything else on this page is up to date.',
-  setting_up: 'Your account is being set up here. Check again in a minute.',
+  setting_up: 'The account is being set up here. Check again in a minute.',
   not_connected: 'This part is not connected yet.',
   off: 'This part is switched off.',
-  verify_email: 'Verify your e-mail to see this part.',
+  verify_email: 'Verify the e-mail to see this part.',
 };
 
 export async function dashboard(ctx, user) {
@@ -212,7 +212,7 @@ export async function convertRequest(ctx, user, body, idem) {
   if (!idem) throw new HttpError(400, 'idempotency_key_required', 'send an Idempotency-Key header');
   const prof = await getProfile(ctx);
   if (!ctx.engines.mnp || !prof.mnp_enabled) throw new HttpError(503, 'engine_unavailable', 'Moneypenny is not available right now');
-  if (user.status !== 'active' || !user.email_verified || !user.email) throw new HttpError(409, 'email_unverified', 'verify your e-mail first');
+  if (user.status !== 'active' || !user.email_verified || !user.email) throw new HttpError(409, 'email_unverified', 'verify the e-mail first');
   if (!isInt(body?.credits, 1, 100_000_000)) throw new HttpError(422, 'invalid_field', 'credits must be a whole number');
   let r;
   try { r = await ctx.engines.mnp.convertRequest({ email: user.email, credits: body.credits, idem: `pcw:${user.id}:${(await ctx.hash(idem)).slice(0, 40)}` }); } catch (e) {

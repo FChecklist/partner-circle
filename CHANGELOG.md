@@ -2,6 +2,13 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.8 - 25 Nov 2026
+Audit fixes on top of build 74141bad (this entry's commit is the one that applies the patch; `public/version.json` carries it once committed).
+- Wording: no my, mine, your or yours in any screen, page, error message or e-mail text (about 85 places, including the privacy notice and the Terms page: **a person should read those two once**). A scan test fails on any such word except the exact sentence "Copy this link and paste in your AI to work."
+- No tick boxes: "Remember on this device" is now a choice "After signing in"; the owner policy switches (CA confirmed, discount codes, site address confirmed, site live) are selects. A scan test fails if a checkbox returns. "Host" in screens reads "site address".
+- Joining bonus: the database already refuses a second `bonus:<person>` ledger row (unique `ledger.ref`); a refusal is now treated as "already paid" and the sale is written without the bonus, instead of failing the whole sale. Tested with a stale read and with two parallel first sales. No migration needed.
+- A joining bonus that is still held says so on the Earnings screen with its eligible date, and every product's `payout_wait` says a joining bonus is held until it is eligible.
+
 ## 1.0.7 - 25 Nov 2026
 Money rules rechecked against the owner's decisions (full table: `docs/MONEY-RULES-RECHECK-2026-11-25.md`). Money stays OFF; migration 0007 is a draft the owner applies after the audits.
 - Minimum payout is 500 rupees (was 1,000).

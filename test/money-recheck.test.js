@@ -63,13 +63,13 @@ test('Corporate Tambola pays Growth Partners 25% and Refer and Earn 25%; the gam
 test('each product shows its own payout wait in plain words, and it follows what the rate card really does', async () => {
   const h = await mk({ realDefaults: true });
   const sites = Object.fromEntries((await h.call('GET', '/v1/public/sites')).data.map((s) => [s.id, s]));
-  for (const id of ['mom', 'dpdp', 'aios', 'projexa']) assert.equal(sites[id].payout_wait, '80% is paid 7 days after the sale and the rest after 37 days, once the payment is confirmed.', id);
-  for (const id of ['tam', 'th', 'voter', 'el', 'mt']) assert.equal(sites[id].payout_wait, 'Paid 7 days after the sale, once the payment is confirmed.', id);
+  for (const id of ['mom', 'dpdp', 'aios', 'projexa']) assert.equal(sites[id].payout_wait, '80% is paid 7 days after the sale and the rest after 37 days, once the payment is confirmed. A joining bonus is held until it is eligible, like the commission on that first sale.', id);
+  for (const id of ['tam', 'th', 'voter', 'el', 'mt']) assert.equal(sites[id].payout_wait, 'Paid 7 days after the sale, once the payment is confirmed. A joining bonus is held until it is eligible, like the commission on that first sale.', id);
   // the sentence is computed from the site's own numbers: change the split and the sentence changes with it
   assert.equal((await h.call('PATCH', '/v1/admin/sites/mom', { key: h.owner, body: { early_release_bps: 5000 } })).status, 200);
-  assert.equal((await h.call('GET', '/v1/public/sites')).data.find((s) => s.id === 'mom').payout_wait, '50% is paid 7 days after the sale and the rest after 37 days, once the payment is confirmed.');
+  assert.equal((await h.call('GET', '/v1/public/sites')).data.find((s) => s.id === 'mom').payout_wait, '50% is paid 7 days after the sale and the rest after 37 days, once the payment is confirmed. A joining bonus is held until it is eligible, like the commission on that first sale.');
   for (const bad of [10000, -1, 12.5, '80']) assert.equal((await h.call('PATCH', '/v1/admin/sites/mom', { key: h.owner, body: { early_release_bps: bad } })).status, 422, `early_release_bps ${bad}`);
-  assert.equal(payoutWaitText({ return_days: 0, buffer_days: 7, early_release_bps: 8000 }), 'Paid 7 days after the sale, once the payment is confirmed.', 'no money-back window, nothing to split');
+  assert.equal(payoutWaitText({ return_days: 0, buffer_days: 7, early_release_bps: 8000 }), 'Paid 7 days after the sale, once the payment is confirmed. A joining bonus is held until it is eligible, like the commission on that first sale.', 'no money-back window, nothing to split');
   assert.equal(earlyShareBps({ return_days: 30, buffer_days: 7, early_release_bps: 10000 }), 0, 'a share of 100% is not a split');
 });
 

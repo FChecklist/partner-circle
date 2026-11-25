@@ -3,7 +3,7 @@
   "version": "1.0.8",
   "releasedAt": "2026-11-25T09:00:00Z",
   "releasedAtIST": "25 Nov 2026 14:30 IST",
-  "commit": "pending: the commit that applies this patch (set it when committing, as for 1.0.7)",
+  "commit": "e49c50a7f453bc18ea2b020417c295e6cf1cb6d1",
   "changes": [
     "1.0.8: audit fixes: no my/your wording anywhere a person reads, no tick boxes (selects instead), joining bonus once by the database, held bonus text; commit 74141bad is the build this patch is on",
     "1.0.7: money rules rechecked (minimum 500 rupees, 80/20 split for money-back products, pay days 15 and last day, joining bonus, team share off, Corporate Tambola 25%, payee read from record, rupee sign); dashboard contract",

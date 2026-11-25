@@ -2,6 +2,14 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.9 - 26 Nov 2026
+Fixes after two more audits of 1.0.8 (build e49c50a7; not deployed yet).
+- Joining bonus: only for a Growth Partner (role `partner`), as the owner decided on 14 Nov. Sales Manager, Team Leader and Executive are staff on a salary plan and get none; Refer and Earn people still get none. The summary says `none` for them. Tested with a manager and a partner making a first sale each.
+- An AI key that sends `early: true` with a payout approval is refused (403) and nothing is approved or logged as approved; tested (the route was already owner-only, the test now says so).
+- The wording guard has a second net that reads every code line of the shipped scripts without using the string reader, so a possessive cannot hide behind a regex literal or a nested template; the string reader itself is tested on those cases. The earlier note's "about 85 places" is the number of places that were changed, not a number left undone; both scans find none today.
+- No tick box: the scan now covers every script, page and style file under `public`, and a checkbox or radio set through `setAttribute`.
+- The payee: the default payee name read from the record appears in no shipped script, page or style (before, only one exact phrase was checked).
+
 ## 1.0.8 - 25 Nov 2026
 Audit fixes on top of build 74141bad (this entry's commit is the one that applies the patch; `public/version.json` carries it once committed).
 - Wording: no my, mine, your or yours in any screen, page, error message or e-mail text (about 85 places, including the privacy notice and the Terms page: **a person should read those two once**). A scan test fails on any such word except the exact sentence "Copy this link and paste in your AI to work."

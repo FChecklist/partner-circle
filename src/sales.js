@@ -84,13 +84,13 @@ async function rzpState(ctx, paymentId, amount, orderId) {
 }
 
 /**
- * Joining bonus (owner, 14 Nov 2026): a Growth Partner gets a fixed amount with the FIRST sale, as long as that sale was paid within
+ * Joining bonus (owner, 14 Nov 2026): a Growth Partner (role `partner`; not Refer and Earn people, not the Executive, Team Leader or Sales Manager staff) gets a fixed amount with the FIRST sale, as long as that sale was paid within
  * `joining_bonus_valid_days` of the owner's approval. After that window the bonus is gone. One bonus per person, ever (the ledger ref is
  * unique and is also checked here). It is a 'commission' entry on the first sale, mature when that sale is fully mature, so a refund of the
  * sale voids it together with the commission. Returns the ledger entry, or null when no bonus applies.
  */
 async function joiningBonusEntry(ctx, user, policy, { saleId, paidAt, eligibleAt }) {
-  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role === 'refer') return null;
+  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role !== 'partner') return null;
   if (paidAt > user.approved_at + policy.joining_bonus_valid_days * DAY) return null;
   const ref = `bonus:${user.id}`;
   if (await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [ref])) return null;
@@ -99,7 +99,7 @@ async function joiningBonusEntry(ctx, user, policy, { saleId, paidAt, eligibleAt
 
 /** Where a partner's joining bonus stands, for the screen: none (no bonus for this person), open (waiting for a first sale), earned, voided (its sale was refunded) or gone (the window passed). */
 export async function bonusStatus(ctx, user, policy) {
-  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role === 'refer') return { state: 'none' };
+  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role !== 'partner') return { state: 'none' };
   const expires_at = user.approved_at + policy.joining_bonus_valid_days * DAY;
   const row = await ctx.db.first('SELECT id, eligible_at FROM ledger WHERE ref=?', [`bonus:${user.id}`]);
   let state = ctx.now() <= expires_at ? 'open' : 'gone';

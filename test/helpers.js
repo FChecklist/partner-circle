@@ -17,7 +17,8 @@ export const ENV = {
 };
 
 export async function mk(opts = {}) {
-  const { raw, db } = openDb();
+  // opts.dbPair = a database that already exists ({ raw, db }), e.g. one an earlier build left behind and migration 0007 was then applied to
+  const { raw, db } = opts.dbPair || openDb();
   const clock = { t: T0 };
   await seedSites(db, T0);
   // stands in for the owner confirming the best-guess hosts (see policy.js DEFAULT_SITES): tests exercise every site

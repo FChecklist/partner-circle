@@ -51,4 +51,6 @@ These are in the owner's v3 design but are new products, not rule corrections. T
 
 ## What was not checked
 
-Real e-mail, Razorpay, Moneypenny and Monopoly were never called: everything above ran against the in-memory test database and the mock engines. The migration was applied to an empty in-memory database only.
+Real e-mail, Razorpay, Moneypenny and Monopoly were never called: everything above ran against the in-memory test database and the mock engines.
+
+Migration 0007 was applied to an empty in-memory database and, in `test/migration-0007.test.js`, to an in-memory database built the way version 1.0.6 left it (migrations 0001 to 0006 and rows written with the old columns: two products, four people, one matured sale with its single commission entry, one paid payout). That test shows: no row added or lost and the ledger byte for byte unchanged; the Veridian product row gets the 80/20 split and the games product does not; people approved before count from their sign-up day (no surprise joining bonus for a partner approved long ago, the bonus still arrives for a recent one); the old sale keeps its one release date while a new sale of the same product splits; one payout can carry the old entry; a payout that has no pay day is approved as before; refunds void the old single entry and both parts of a new sale; both hash chains still verify. It was NOT applied to the real D1 database (the owner does that after the audits), and no copy of real data was used.

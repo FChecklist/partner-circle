@@ -14,6 +14,7 @@ Money rules rechecked against the owner's decisions (full table: `docs/MONEY-RUL
 - Owner queue counts flagged sales, not the ledger parts of one sale.
 - Dashboard design and API contract written (`docs/DASHBOARD-OVER-MONEYPENNY-AND-MONOPOLY.md`) with a test that compares it with the real answer.
 - Added a CI workflow (`.github/workflows/ci.yml`): build and tests on Node 22 and 24.
+- Migration 0007 is tested on a database that already holds rows (`test/migration-0007.test.js`), not only on an empty one.
 
 ## 1.0.6 - 23 Nov 2026
 - Site calls are now signed over time, method, path and body, so a signed sale cannot be replayed against another endpoint (sites must update their signing line; see docs/INTEGRATION.md).

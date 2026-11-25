@@ -1,9 +1,10 @@
 // Users, hierarchy, e-mail verification, KYC.
 // Hierarchy (top to bottom): manager > leader > exec > partner. "refer" users (Refer and Earn) sit outside it.
 
-import { HttpError, newId, randSlug, randHex, needStr, mask, encryptField, decryptField } from './util.js';
+import { HttpError, newId, randSlug, randHex, needStr, mask, maskMid, encryptField, decryptField } from './util.js';
 import { atomic, auditStmts } from './chain.js';
 import { createKey } from './auth.js';
+import { notify } from './notify.js';
 
 export const RANK = { manager: 4, leader: 3, exec: 2, partner: 1, refer: 0 };
 const ALLOWED_PARENT = {
@@ -96,8 +97,9 @@ export async function createUser(ctx, { role, name, email, phone, country = 'IN'
   try {
     await atomic(ctx, async () => [
       {
-        sql: 'INSERT INTO users (id,role,name,handle,email,email_hash,phone,country,parent_id,email_verified,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)',
-        params: [id, role, name, handle, email, emailHash, phone, cc, parent_id, st, ctx.now()],
+        sql: 'INSERT INTO users (id,role,name,handle,email,email_hash,phone,country,parent_id,email_verified,status,approved_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)',
+        // approved_at starts the joining-bonus window; Refer and Earn people are never "approved" by the owner, so they have none
+        params: [id, role, name, handle, email, emailHash, phone, cc, parent_id, st, st === 'active' && role !== 'refer' ? ctx.now() : null, ctx.now()],
       },
       ...(await auditStmts(ctx, [{ action: 'user.create', target: `user:${id}`, meta: { role, status: st, parent_id } }])),
     ]);
@@ -108,12 +110,19 @@ export async function createUser(ctx, { role, name, email, phone, country = 'IN'
   return ctx.db.first('SELECT * FROM users WHERE id=?', [id]);
 }
 
-/** Public sign-up: returns the user and their login key (shown once). */
+/**
+ * Public sign-up: returns the user and their login key (shown once).
+ * Only these fields are read from the request. Everything else (status, parent_id, ...) is ignored, so a visitor can never
+ * activate themselves or choose their place in the hierarchy: partners start 'pending' until the owner approves.
+ */
 export async function register(ctx, body) {
-  if (!['refer', 'partner'].includes(body?.role)) throw new HttpError(422, 'invalid_field', 'role must be "refer" or "partner"');
-  const user = await createUser(ctx, { ...body, parent_id: null });
-  const key = await createKey(ctx, { kind: 'user', user_id: user.id, label: 'self-service login', created_by: user.id });
-  return { user: publicUser(user), api_key: key.token, note: 'Save this key now: it is shown once and is your login.' };
+  if (!body || typeof body !== 'object') throw new HttpError(422, 'invalid_body', 'JSON object expected');
+  if (!['refer', 'partner'].includes(body.role)) throw new HttpError(422, 'invalid_field', 'role must be "refer" or "partner"');
+  const { role, name, email, phone, country, sponsor } = body;
+  const user = await createUser(ctx, { role, name, email, phone, country, sponsor, parent_id: null });
+  const key = await createKey(ctx, { kind: 'user', user_id: user.id, label: 'self-service login', created_by: user.id },
+    { audit: (k) => [{ action: 'key.issue', target: `key:${k.id}`, meta: { kind: 'user', user_id: user.id, via: 'self-registration' } }] });
+  return { user: publicUser(user), api_key: key.token, note: 'Save this key now: it is shown once and is the login.' };
 }
 
 export async function setStatus(ctx, userId, status, why) {
@@ -121,9 +130,13 @@ export async function setStatus(ctx, userId, status, why) {
   if (!u) throw new HttpError(404, 'not_found', 'user not found');
   if (u.status === status) return u;
   await atomic(ctx, async () => [
-    { sql: 'UPDATE users SET status=? WHERE id=?', params: [status, userId] },
+    // the first time a partner becomes active is the approval moment that starts the joining-bonus window; reinstating later does not restart it
+    { sql: "UPDATE users SET status=?, approved_at=CASE WHEN ?='active' AND role<>'refer' THEN COALESCE(approved_at, ?) ELSE approved_at END WHERE id=?", params: [status, status, ctx.now(), userId] },
     ...(await auditStmts(ctx, [{ action: `user.${status}`, target: `user:${userId}`, meta: { from: u.status, why: why || null } }])),
   ]);
+  if (status === 'active' && u.status === 'pending') {
+    await notify(ctx, userId, 'You are approved on Partner Circle', 'Good news: the account is approved. You can now create links and start sharing.');
+  }
   return { ...u, status };
 }
 
@@ -139,15 +152,24 @@ export async function sendEmailCode(ctx, user, rateLimit) {
      ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash, expires_at=excluded.expires_at, attempts=0, sent_at=excluded.sent_at`,
     [user.id, await ctx.hash(`${user.id}:${code}`), ctx.now() + 15 * 60000, ctx.now()],
   );
-  await ctx.mailer.send({ to: user.email, subject: 'Your Partner Circle verification code', text: `Your code is ${code}. It works for 15 minutes.`, _code: code });
+  try {
+    // The unconfigured mailer throws 503 mail_not_configured, so a missing Resend setup is reported, never silently swallowed.
+    await ctx.mailer.send({ to: user.email, subject: 'Partner Circle verification code', text: `The code is ${code}. It works for 15 minutes.`, _code: code });
+  } catch (e) {
+    await ctx.db.run('DELETE FROM email_codes WHERE user_id=?', [user.id]);
+    throw e;
+  }
   return { sent: true };
 }
 
 export async function verifyEmailCode(ctx, user, code) {
-  const row = await ctx.db.first('SELECT * FROM email_codes WHERE user_id=?', [user.id]);
-  if (!row || row.expires_at < ctx.now()) throw new HttpError(400, 'code_expired', 'ask for a new code');
-  if (row.attempts >= 5) throw new HttpError(429, 'too_many_attempts', 'ask for a new code');
-  await ctx.db.run('UPDATE email_codes SET attempts = attempts + 1 WHERE user_id=?', [user.id]);
+  // One atomic statement both checks and spends an attempt, so parallel guesses cannot exceed the cap of 5.
+  const row = await ctx.db.first('UPDATE email_codes SET attempts = attempts + 1 WHERE user_id=? AND expires_at >= ? AND attempts < 5 RETURNING code_hash, attempts', [user.id, ctx.now()]);
+  if (!row) {
+    const cur = await ctx.db.first('SELECT attempts, expires_at FROM email_codes WHERE user_id=?', [user.id]);
+    if (cur && cur.expires_at >= ctx.now() && cur.attempts >= 5) throw new HttpError(429, 'too_many_attempts', 'ask for a new code');
+    throw new HttpError(400, 'code_expired', 'ask for a new code');
+  }
   if (row.code_hash !== (await ctx.hash(`${user.id}:${String(code).trim()}`))) throw new HttpError(400, 'wrong_code', 'that code is not right');
   await atomic(ctx, async () => [
     { sql: 'UPDATE users SET email_verified=1 WHERE id=?', params: [user.id] },
@@ -155,6 +177,22 @@ export async function verifyEmailCode(ctx, user, code) {
     ...(await auditStmts(ctx, [{ action: 'user.email_verified', target: `user:${user.id}` }])),
   ]);
   return { verified: true };
+}
+
+/** Owner fallback when e-mail sending is not set up: the owner vouches for the address. Audited. */
+export async function ownerVerifyEmail(ctx, userId) {
+  const u = await ctx.db.first('SELECT * FROM users WHERE id=?', [userId]);
+  if (!u) throw new HttpError(404, 'not_found', 'user not found');
+  if (!u.email) throw new HttpError(422, 'no_email', 'this person has no e-mail on file');
+  if (u.email_verified) return publicUser(u);
+  // The code sent to the address is the proof of ownership. Without working mail the owner could only guess, and this e-mail is the person's identity at Moneypenny.
+  if (ctx.mailer?.configured === false && ctx.env.ALLOW_OWNER_VOUCH !== '1') throw new HttpError(409, 'mail_not_configured', 'e-mail cannot be vouched for without proof; configure mail (RESEND_API_KEY) so the person can verify with a code');
+  await atomic(ctx, async () => [
+    { sql: 'UPDATE users SET email_verified=1 WHERE id=?', params: [userId] },
+    { sql: 'DELETE FROM email_codes WHERE user_id=?', params: [userId] },
+    ...(await auditStmts(ctx, [{ action: 'user.email_verified_by_owner', target: `user:${userId}` }])),
+  ]);
+  return publicUser({ ...u, email_verified: 1 });
 }
 
 export async function updateProfile(ctx, user, body) {
@@ -184,7 +222,12 @@ export async function updateProfile(ctx, user, body) {
 // ---- KYC ------------------------------------------------------------------------------------------------------
 
 export async function submitKyc(ctx, user, body) {
-  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify your e-mail before submitting payout details');
+  if (!user.email_verified) throw new HttpError(409, 'email_unverified', 'verify the e-mail before submitting payout details');
+  // The destination of an open payout is frozen on the payout itself, but editing details while money is moving is never what a
+  // real partner needs, and it is exactly what a thief with a stolen key would do. Wait until the payout is settled.
+  if (await ctx.db.first("SELECT 1 AS x FROM payouts WHERE user_id=? AND status IN ('pending_approval','approved','processing')", [user.id])) {
+    throw new HttpError(409, 'payout_open', 'payout details cannot be changed while a payout is in progress');
+  }
   const india = user.country === 'IN';
   const v = {};
   if (india) {
@@ -213,6 +256,7 @@ export async function submitKyc(ctx, user, body) {
     },
     ...(await auditStmts(ctx, [{ action: 'kyc.submit', target: `user:${user.id}` }])),
   ]);
+  await notify(ctx, user.id, 'Payout details were changed', 'New payout details were submitted on the Partner Circle account. If this was not done by the account holder, reply to this e-mail straight away and rotate the key.');
   return kycView(ctx, user.id);
 }
 
@@ -227,6 +271,32 @@ export async function kycView(ctx, userId) {
     bank_account_masked: await d(k.bank_account), bank_ifsc_swift: k.bank_ifsc_swift ? '(on file)' : null, bank_name: k.bank_name,
     submitted_at: k.submitted_at, verified_at: k.verified_at,
   };
+}
+
+/** What the owner sees when deciding: enough to recognise the details, never the whole secret. The full value needs revealKyc (audited). */
+export async function kycReviewView(ctx, userId) {
+  const d = await decryptKyc(ctx, userId);
+  if (!d) return null;
+  return {
+    status: d.status, country: d.country,
+    pan: maskMid(d.pan, 2, 2), upi_id: d.upi_id ? d.upi_id.replace(/^(.{1,2}).*(@.*)$/, '$1***$2') : null,
+    tax_id: maskMid(d.tax_id, 2, 2), bank_account: d.bank_account ? mask(d.bank_account, 4) : null,
+    bank_ifsc_swift: d.bank_ifsc_swift, bank_name: d.bank_name,
+  };
+}
+
+/** Owner-only: the full decrypted details, with an audit entry for every reveal. */
+export async function revealKyc(ctx, userId) {
+  const d = await decryptKyc(ctx, userId);
+  if (!d) throw new HttpError(404, 'not_found', 'no payout details on file');
+  await atomic(ctx, () => auditStmts(ctx, [{ action: 'kyc.revealed', target: `user:${userId}` }]));
+  return d;
+}
+
+/** A short, non-secret description of where money goes, for the owner's payout queue ("im***@okbank", "HDFC ****1234"). */
+export function destinationHint(kyc, india) {
+  if (india) return kyc.upi_id ? kyc.upi_id.replace(/^(.{1,2}).*(@.*)$/, '$1***$2') : null;
+  return `${kyc.bank_name || 'bank'} ${mask(kyc.bank_account, 4)}`;
 }
 
 export async function decryptKyc(ctx, userId) {
@@ -277,4 +347,66 @@ export async function uplineOf(ctx, userId) {
     cur = p;
   }
   return out;
+}
+
+// ---- placement (promotion / moving a team) ------------------------------------------------------------------------
+
+/**
+ * Change someone's role and/or who they report to. Affects FUTURE sales only: commission and override entries already in
+ * the ledger stay as they were posted (the ledger is append-only).
+ */
+export async function setPlacement(ctx, userId, { role, parent_id } = {}) {
+  const u = await ctx.db.first('SELECT * FROM users WHERE id=?', [userId]);
+  if (!u) throw new HttpError(404, 'not_found', 'user not found');
+  if (role === undefined && parent_id === undefined) throw new HttpError(422, 'invalid_body', 'send role and/or parent_id');
+  const newRole = role ?? u.role;
+  if (!(newRole in RANK)) throw new HttpError(422, 'invalid_field', 'role');
+  const newParent = parent_id === undefined ? u.parent_id : parent_id || null;
+  if (newParent === userId) throw new HttpError(422, 'invalid_parent', 'a person cannot report to themselves');
+  if (newParent) {
+    // no loops: the new parent must not already sit below this person
+    const down = await teamOf(ctx, userId);
+    if (down.some((m) => m.id === newParent)) throw new HttpError(422, 'invalid_parent', 'that would create a loop in the hierarchy');
+  }
+  await validateParent(ctx, newRole, newParent);
+  // everyone currently below must still be allowed to report to the new role
+  const kids = await ctx.db.all('SELECT id, role FROM users WHERE parent_id=?', [userId]);
+  const bad = kids.filter((k) => !ALLOWED_PARENT[k.role].includes(newRole));
+  if (bad.length) throw new HttpError(409, 'children_conflict', `${bad.length} direct report(s) could not report to a ${newRole}; move them first`, { ids: bad.map((k) => k.id) });
+  if (newRole === u.role && newParent === u.parent_id) return publicUser(u);
+  await atomic(ctx, async () => [
+    { sql: 'UPDATE users SET role=?, parent_id=? WHERE id=?', params: [newRole, newParent, userId] },
+    ...(await auditStmts(ctx, [{ action: 'user.placement', target: `user:${userId}`, meta: { role: [u.role, newRole], parent_id: [u.parent_id, newParent] } }])),
+  ]);
+  return publicUser(await ctx.db.first('SELECT * FROM users WHERE id=?', [userId]));
+}
+
+// ---- erasure (DPDP) -----------------------------------------------------------------------------------------------
+
+/**
+ * Remove a person's personal details while keeping the money trail. Allowed only when nothing is owed to them and no payout is open.
+ * The user row stays (ledger and action-log entries point at its id) but name, e-mail, phone, payout details, keys and links go.
+ */
+export async function eraseUser(ctx, userId) {
+  const u = await ctx.db.first('SELECT * FROM users WHERE id=?', [userId]);
+  if (!u) throw new HttpError(404, 'not_found', 'user not found');
+  if (u.erased_at) return { erased: true, already: true };
+  if (await ctx.db.first("SELECT 1 AS x FROM payouts WHERE user_id=? AND status IN ('pending_approval','approved','processing')", [userId])) {
+    throw new HttpError(409, 'payout_open', 'settle or cancel the open payout first');
+  }
+  const owed = (await ctx.db.first('SELECT COALESCE(SUM(amount_minor),0) AS n FROM ledger WHERE account_id=?', [userId])).n;
+  if (owed !== 0) throw new HttpError(409, 'balance_not_zero', 'money is still owed to or by this person; settle it before erasing', { ledger_total_minor: owed });
+  const now = ctx.now();
+  await atomic(ctx, async () => [
+    { sql: "UPDATE users SET name='Erased user', email=NULL, email_hash=NULL, phone=NULL, status='suspended', email_verified=0, erased_at=? WHERE id=?", params: [now, userId] },
+    { sql: 'DELETE FROM user_kyc WHERE user_id=?', params: [userId] },
+    { sql: 'DELETE FROM email_codes WHERE user_id=?', params: [userId] },
+    { sql: "DELETE FROM leads WHERE user_id=? AND source='registered'", params: [userId] },
+    { sql: 'UPDATE api_keys SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', params: [now, userId] },
+    { sql: 'UPDATE links SET active=0 WHERE user_id=?', params: [userId] },
+    { sql: 'UPDATE codes SET active=0 WHERE user_id=?', params: [userId] },
+    { sql: 'UPDATE payouts SET dest_enc=NULL, destination_masked=NULL WHERE user_id=?', params: [userId] },
+    ...(await auditStmts(ctx, [{ action: 'user.erased', target: `user:${userId}` }])),
+  ]);
+  return { erased: true };
 }

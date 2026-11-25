@@ -58,6 +58,18 @@ export function mask(s, keep = 4) {
   return t.length <= keep ? '*'.repeat(t.length) : '*'.repeat(t.length - keep) + t.slice(-keep);
 }
 
+/** Keeps the first `head` and last `tail` characters, hides the middle. For things the owner must recognise (PAN, UPI id). */
+export function maskMid(s, head = 2, tail = 2) {
+  if (!s) return null;
+  const t = String(s);
+  return t.length <= head + tail ? '*'.repeat(t.length) : t.slice(0, head) + '*'.repeat(t.length - head - tail) + t.slice(-tail);
+}
+
+const HOST_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+export const isHostname = (h) => typeof h === 'string' && HOST_RE.test(h);
+/** host === d or a subdomain of d, for any d in the owned list. */
+export const hostIsOwned = (host, owned) => Array.isArray(owned) && owned.some((d) => host === d || host.endsWith('.' + d));
+
 export function isInt(n, min = -Infinity, max = Infinity) {
   return Number.isSafeInteger(n) && n >= min && n <= max;
 }
@@ -68,6 +80,18 @@ export function needStr(v, name, max = 200) {
 }
 
 export const DAY = 86400000;
+
+/** Same mailbox, however it is typed: lower case, "+tag" dropped, dots dropped for Gmail. Used only to catch self-referral aliases. */
+export function normEmail(e) {
+  const v = String(e || '').trim().toLowerCase();
+  const at = v.lastIndexOf('@');
+  if (at < 1) return v;
+  let local = v.slice(0, at).split('+')[0];
+  let host = v.slice(at + 1);
+  if (host === 'googlemail.com') host = 'gmail.com';
+  if (host === 'gmail.com') local = local.replace(/\./g, '');
+  return `${local}@${host}`;
+}
 
 export function aesKey(secret) {
   return sha256Bytes(secret).then((b) => crypto.subtle.importKey('raw', b, 'AES-GCM', false, ['encrypt', 'decrypt']));

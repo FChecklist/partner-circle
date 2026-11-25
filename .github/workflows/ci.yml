@@ -1,0 +1,28 @@
+# Checks every change: the build check (syntax of every file, migrations replayed on an empty database, sites seeded) and the whole test suite.
+# No secrets are used, nothing is deployed, and nothing here touches Cloudflare, Razorpay, Moneypenny or Monopoly: the tests run on an in-memory database with mock engines.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ['local/**', 'feat/**']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Build check
+        run: npm run build
+      - name: Tests
+        run: npm test

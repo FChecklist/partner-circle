@@ -1,13 +1,14 @@
 // Request context: everything a handler needs, injected so tests can control time, secrets and adapters.
 import { HttpError, sha256Hex, hmacHex } from './util.js';
-import { mockPayoutAdapter, nullMailer } from './adapters.js';
+import { mockPayoutAdapter, unconfiguredMailer } from './adapters.js';
 
-export function makeCtx({ db, env = {}, now, mailer, payouts, fetchImpl } = {}) {
+export function makeCtx({ db, env = {}, now, mailer, payouts, fetchImpl, engines } = {}) {
   const ctx = {
     db,
     env,
+    engines: engines || {}, // { mnp, mono }: absent = "not connected" (never fake numbers)
     now: now || (() => Date.now()),
-    mailer: mailer || nullMailer(),
+    mailer: mailer || unconfiguredMailer(),
     payouts: payouts || mockPayoutAdapter(),
     fetchImpl: fetchImpl || globalThis.fetch,
     actor: null,

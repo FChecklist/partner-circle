@@ -1,0 +1,24 @@
+{
+  "product": "Partner Circle",
+  "version": "1.0.9",
+  "releasedAt": "2026-11-25T20:45:00Z",
+  "releasedAtIST": "26 Nov 2026 02:15 IST",
+  "commit": "344844531dbea853c38e9bb01dad3eb6d46af022",
+  "changes": [
+    "1.0.9: the joining bonus is for a Growth Partner only (not staff roles); wording guard has a second net that does not depend on the string reader; no tick box in any file under public; an AI key cannot approve early; the payee default is not typed into any file; commit e49c50a7 is the build this patch is on, this release is commit 34484453",
+    "1.0.8: audit fixes: no my/your wording anywhere a person reads, no tick boxes (selects instead), joining bonus once by the database, held bonus text; commit 74141bad is the build this patch is on",
+    "1.0.7: money rules rechecked (minimum 500 rupees, 80/20 split for money-back products, pay days 15 and last day, joining bonus, team share off, Corporate Tambola 25%, payee read from record, rupee sign); dashboard contract",
+    "1.0.6: site signature covers method and path; Razorpay dedupe from signed body; privacy retention lines; small fixes",
+    "1.0.5: no tick box or accept button at sign-up (plain Terms and Privacy links); privacy notice 2026-11-23; footer time now true IST; terms page",
+    "1.0.4: grievance officer contact line added to the footer and privacy page (plain text)",
+    "1.0.3: erasure requests listed in full (oldest first) and shown on the Approvals screen; one record per person even in parallel; index (migration 0006)",
+    "1.0.2: erasure requests deduplicated per person and grouped in the owner queue",
+    "1.0.1: refund/claim and mark-failed re-check payout state inside the atomic step (no release of a sent payout); owner queue flags refunded sale in waiting payout; consent required on server, privacy page, data/rotate/erase buttons; prospect replies uniform and counted",
+    "Front door for the Moneypenny / Corporate Monopoly / Partner Circle suite: one dashboard, signed provisioning, degraded mode",
+    "Commission hooks to Moneypenny built but OFF in v1 (server switch MNP_COMMISSION_ENABLED, ledger-only)",
+    "Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes",
+    "Fixes from five independent audit passes (no double pay, refund after send, erase waits for Monopoly)",
+    "Version number and version notes added (this change)",
+    "Cloud audit round 1 fixes: payout request and approve re-checked atomically, payout sent marker, verified e-mail only for engine lookups, key rotation, privacy notice and export, anonymous leaderboard"
+  ]
+}

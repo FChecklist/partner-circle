@@ -1,0 +1,73 @@
+# Partner Circle: version notes
+
+Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
+
+## 1.0.9 - 26 Nov 2026
+Fixes after two more audits of 1.0.8 (build e49c50a7; not deployed yet).
+- Joining bonus: only for a Growth Partner (role `partner`), as the owner decided on 14 Nov. Sales Manager, Team Leader and Executive are staff on a salary plan and get none; Refer and Earn people still get none. The summary says `none` for them. Tested with a manager and a partner making a first sale each.
+- An AI key that sends `early: true` with a payout approval is refused (403) and nothing is approved or logged as approved; tested (the route was already owner-only, the test now says so).
+- The wording guard has a second net that reads every code line of the shipped scripts without using the string reader, so a possessive cannot hide behind a regex literal or a nested template; the string reader itself is tested on those cases. The earlier note's "about 85 places" is the number of places that were changed, not a number left undone; both scans find none today.
+- No tick box: the scan now covers every script, page and style file under `public`, and a checkbox or radio set through `setAttribute`.
+- The payee: the default payee name read from the record appears in no shipped script, page or style (before, only one exact phrase was checked).
+- Two owner documents (`docs/OWNER-DECISIONS.md` item 10 and `docs/MONEY-RULES-RECHECK-2026-11-25.md` question 10) still said the wording sweep was open; they now say it was done in 1.0.8. The Terms page sentence about buying through a personal link reads plainly again.
+
+## 1.0.8 - 25 Nov 2026
+Audit fixes on top of build 74141bad (this entry's commit is the one that applies the patch; `public/version.json` carries it once committed).
+- Wording: no my, mine, your or yours in any screen, page, error message or e-mail text (about 85 places, including the privacy notice and the Terms page: **a person should read those two once**). A scan test fails on any such word except the exact sentence "Copy this link and paste in your AI to work."
+- No tick boxes: "Remember on this device" is now a choice "After signing in"; the owner policy switches (CA confirmed, discount codes, site address confirmed, site live) are selects. A scan test fails if a checkbox returns. "Host" in screens reads "site address".
+- Joining bonus: the database already refuses a second `bonus:<person>` ledger row (unique `ledger.ref`); a refusal is now treated as "already paid" and the sale is written without the bonus, instead of failing the whole sale. Tested with a stale read and with two parallel first sales. No migration needed.
+- A joining bonus that is still held says so on the Earnings screen with its eligible date, and every product's `payout_wait` says a joining bonus is held until it is eligible.
+
+## 1.0.7 - 25 Nov 2026
+Money rules rechecked against the owner's decisions (full table: `docs/MONEY-RULES-RECHECK-2026-11-25.md`). Money stays OFF; migration 0007 is a draft the owner applies after the audits.
+- Minimum payout is 500 rupees (was 1,000).
+- Money-back products pay 80% of each commission after 7 days and the last 20% after 37 (new `sites.early_release_bps`). A refund cancels both parts, or only the unsent part when the first was already sent.
+- Pay days: a payout waits for the 15th or the last day of the month; the owner can approve early on purpose, and it is logged.
+- Joining bonus of 500 rupees with the first sale, if that sale is paid within 30 days of approval. Once per person. A refund of that sale takes it back.
+- Team share is OFF until the owner decides. Corporate Tambola pays 25% to Growth Partners and to Refer and Earn. No discount codes on the games and Townhall products.
+- The payee name is read from the payee record (`tenant_profile.payee_name`), no longer typed into the pages. Screens say Razorpay, not RazorpayX, and use the rupee sign. Each product shows its own payout wait.
+- Moneypenny: each part of a split sale and the bonus is its own credit with its own sale reference.
+- Owner queue counts flagged sales, not the ledger parts of one sale.
+- Dashboard design and API contract written (`docs/DASHBOARD-OVER-MONEYPENNY-AND-MONOPOLY.md`) with a test that compares it with the real answer.
+- Added a CI workflow (`.github/workflows/ci.yml`): build and tests on Node 22 and 24.
+- Migration 0007 is tested on a database that already holds rows (`test/migration-0007.test.js`), not only on an empty one.
+
+## 1.0.6 - 23 Nov 2026
+- Site calls are now signed over time, method, path and body, so a signed sale cannot be replayed against another endpoint (sites must update their signing line; see docs/INTEGRATION.md).
+- Razorpay events are de-duplicated by the event type and entity id inside the signed body, not by a header anyone could change.
+- Direct RazorpayX payout code is documented as OFF unless the owner decides otherwise.
+- Privacy page: how long records are kept and what stays after erasure, in plain words; layout fixed; "Need help?" line tidied.
+- The erasure list empties once a request is completed; field names like `constructor` are refused in settings.
+
+## 1.0.5 - 23 Nov 2026
+- Sign-up has no tick box and no "I agree" button (owner rule v1.3). The form shows a gentle line with links to the Terms and Conditions and the Privacy notice; sign-up works without any consent field and ignores one if an old app sends it. The privacy notice is now version 2026-11-23.
+- Added a short Terms and Conditions page (/terms.html) for the owner to finalise.
+- Fixed the release time shown in the footer: it showed the UTC time labelled IST.
+- Notes for the owner: a check to run before applying migration 0003.
+
+## 1.0.4 - 23 Nov 2026
+- A friendly "Need help?" line with the grievance officer's name, e-mail and WhatsApp number is now in the page footer and on the privacy page. It is plain text: no tick box, no button.
+
+## 1.0.3 - 21 Nov 2026
+- Erasure requests: the owner queue lists every request, oldest first (no cut-off), and the Approvals screen now shows them. Two requests at the same instant still write one record. New database index (migration 0006) keeps the lookups cheap.
+
+## 1.0.2 - 21 Nov 2026
+- Erasure requests: asking again no longer writes a new record, and the owner queue lists each person once, so one person cannot push others' requests out of the owner's view.
+- Docs: README test count no longer hard-coded; the privacy-page grievance contact is a launch gate (do not invite Indian partners until the owner fills it).
+
+## 1.0.1 - 21 Nov 2026
+- Money fix: a refund or a claim that arrives at the same moment the owner approves a payout can no longer give that payout's money back to the partner (the check is now made again inside the same step that writes the change). Marking a payout as failed has the same re-check, and a payout already handed over (also one paid by hand) needs the owner to confirm with the provider first.
+- The owner queue now flags a waiting payout that contains a refunded sale, and lists people who asked to be erased.
+- Privacy: sign-up now needs the consent tick on the server too; a public privacy page (/privacy.html); buttons in the account to download your data, rotate your key and ask for erasure.
+- Prospect registration: a held e-mail now gets the same reply as a fresh one, every try counts towards a limit of 100 an hour, and the limit of 50 counts only prospects still inside their protection period.
+- Key rotation replies are never stored with an Idempotency-Key.
+- Docs: README migrations list and test counts corrected; version file kept in step with the release.
+
+## 1.0.0 - 21 Nov 2026 11:00 IST
+- Front door for the Moneypenny / Corporate Monopoly / Partner Circle suite: one dashboard (Moneypenny credits owned with the 100 = 1 US$ rate and real money beside it, Monopoly targets and achievements, commissions), signed provisioning, degraded mode when an engine is down.
+- Commission to Moneypenny is built but OFF in v1 (`MNP_COMMISSION_ENABLED` server switch; commissions stay in the ledger and the owner-approved payout flow). Payouts are off by default (mock adapter).
+- Tenant profile, OpenAPI with read/write and money flags, AI keys barred from money routes, audit log.
+- Hardened through five independent audit passes (no double pay, refund after send, release only when no credit can exist, erase waits for Monopoly).
+- Cloud audit round 1 fixes: payout request/approve re-checked inside the atomic step, payout sent marker before the provider call (no release of an unknown outcome), concurrent approve guard, Moneypenny claim lease, dashboard asks engines only for a verified e-mail, key rotation, payout-details-changed notice and flag, e-mail alias self-referral check, prospect cap and uniform replies, anonymous leaderboard, privacy notice with consent record, data export and erasure request, cheaper rate limiting.
+- Known limits: erase check not atomic with a concurrent claim; Moneypenny has no suspend call.
+- Version number, version notes (this file) and footer version line added.

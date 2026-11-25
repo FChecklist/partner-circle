@@ -2,43 +2,64 @@
 // Key token: "pck_<id>.<secret>". Only sha256(secret) is stored; the secret is shown once at creation.
 
 import { HttpError, randHex, sha256Hex, hmacHex, timingSafeEqualStr } from './util.js';
+import { atomic, auditStmts } from './chain.js';
 
 /** Scopes only a human owner can hold. An AI key can never be minted with these (CONSTITUTION: AI proposes, owner approves). */
-export const OWNER_ONLY_SCOPES = ['payouts.approve', 'kyc.verify', 'users.approve', 'keys.manage', 'policy.write', 'schemes.settle', 'schemes.activate'];
-export const AI_SCOPES = ['admin.read', 'users.create', 'users.suspend', 'codes.write', 'schemes.write', 'sites.read'];
+export const OWNER_ONLY_SCOPES = ['payouts.approve', 'kyc.verify', 'users.approve', 'keys.manage', 'policy.write', 'schemes.settle', 'schemes.activate', 'users.erase', 'disputes.resolve', 'suite.write'];
+export const AI_SCOPES = ['admin.read', 'users.create', 'users.suspend', 'codes.write', 'schemes.write', 'sites.read', 'maintenance.run'];
 export const USER_SCOPES = ['me'];
 export const SITE_SCOPES = ['integration'];
 
-export async function createKey(ctx, { kind, user_id = null, site_id = null, label = null, scopes, rate_per_min = 120, created_by = null }) {
+/**
+ * Issue a key. `audit` (an array of {action,target,meta} or a function of the key) is written in the SAME atomic batch as the key
+ * row, so a privileged change can never exist without its action-log entry.
+ */
+export async function createKey(ctx, { kind, user_id = null, site_id = null, label = null, scopes, rate_per_min = 120, created_by = null }, { audit } = {}) {
   if (!['owner', 'ai', 'user', 'site'].includes(kind)) throw new HttpError(422, 'invalid_field', 'kind');
-  scopes = scopes || (kind === 'owner' ? ['*'] : kind === 'ai' ? AI_SCOPES : kind === 'user' ? USER_SCOPES : SITE_SCOPES);
+  scopes = scopes ?? (kind === 'owner' ? ['*'] : kind === 'ai' ? AI_SCOPES : kind === 'user' ? USER_SCOPES : SITE_SCOPES);
+  if (!Array.isArray(scopes) || scopes.some((x) => typeof x !== 'string')) throw new HttpError(422, 'invalid_field', 'scopes must be an array of strings');
   if (kind === 'ai') {
     const bad = scopes.filter((s) => !AI_SCOPES.includes(s));
     if (bad.length) throw new HttpError(422, 'scope_not_assignable', `AI keys cannot hold: ${bad.join(', ')}`);
   }
+  if (kind === 'user' && scopes.some((x) => !USER_SCOPES.includes(x))) throw new HttpError(422, 'scope_not_assignable', 'user keys hold only: me');
+  if (kind === 'site' && scopes.some((x) => !SITE_SCOPES.includes(x))) throw new HttpError(422, 'scope_not_assignable', 'site keys hold only: integration');
+  if (!Number.isInteger(rate_per_min) || rate_per_min < 1 || rate_per_min > 6000) throw new HttpError(422, 'invalid_field', 'rate_per_min must be 1..6000');
   if (kind === 'owner' && !(scopes.length === 1 && scopes[0] === '*')) throw new HttpError(422, 'invalid_field', 'owner keys hold "*"');
   if (kind === 'user' && !user_id) throw new HttpError(422, 'invalid_field', 'user_id');
   if (kind === 'site' && !site_id) throw new HttpError(422, 'invalid_field', 'site_id');
   const id = randHex(6);
   const secret = randHex(24);
-  const now = ctx.now();
-  await ctx.db.run(
-    'INSERT INTO api_keys (id,kind,user_id,site_id,label,hash,scopes,rate_per_min,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    [id, kind, user_id, site_id, label, await sha256Hex(secret), JSON.stringify(scopes), rate_per_min, created_by, now],
-  );
-  return { id, token: `pck_${id}.${secret}`, kind, scopes };
+  const stmt = {
+    sql: 'INSERT INTO api_keys (id,kind,user_id,site_id,label,hash,scopes,rate_per_min,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    params: [id, kind, user_id, site_id, label, await sha256Hex(secret), JSON.stringify(scopes), rate_per_min, created_by, ctx.now()],
+  };
+  const out = { id, token: `pck_${id}.${secret}`, kind, scopes };
+  if (audit) {
+    const entries = typeof audit === 'function' ? audit(out) : audit;
+    await atomic(ctx, async () => [stmt, ...(await auditStmts(ctx, entries))]);
+  } else await ctx.db.run(stmt.sql, stmt.params);
+  return out;
 }
 
-export async function revokeKey(ctx, id) {
-  const r = await ctx.db.run('UPDATE api_keys SET revoked_at=? WHERE id=? AND revoked_at IS NULL', [ctx.now(), id]);
-  if (!r.changes) throw new HttpError(404, 'not_found', 'key not found or already revoked');
+export async function revokeKey(ctx, id, { audit } = {}) {
+  const k = await ctx.db.first('SELECT id FROM api_keys WHERE id=? AND revoked_at IS NULL', [id]);
+  if (!k) throw new HttpError(404, 'not_found', 'key not found or already revoked');
+  const stmt = { sql: 'UPDATE api_keys SET revoked_at=? WHERE id=? AND revoked_at IS NULL', params: [ctx.now(), id] };
+  if (audit) await atomic(ctx, async () => [stmt, ...(await auditStmts(ctx, audit))]);
+  else await ctx.db.run(stmt.sql, stmt.params);
 }
 
+const mem = new Map(); // per-isolate counters: a flood past the limit is refused here without touching the database (free-tier write budget)
 export async function rateLimit(ctx, bucket, limit, windowMs = 60000) {
   const win = Math.floor(ctx.now() / windowMs);
+  const m = mem.get(bucket);
+  if (m && m.win === win && m.n >= limit) throw new HttpError(429, 'rate_limited', 'too many requests, slow down', { retry_after_s: Math.ceil(((win + 1) * windowMs - ctx.now()) / 1000) });
+  if (mem.size > 5000) mem.clear();
+  mem.set(bucket, { win, n: m && m.win === win ? m.n + 1 : 1 });
   const r = await ctx.db.first(
-    'INSERT INTO rate_limits (bucket,win,n) VALUES (?,?,1) ON CONFLICT(bucket) DO UPDATE SET n = CASE WHEN win = excluded.win THEN n + 1 ELSE 1 END, win = excluded.win RETURNING n',
-    [bucket, win],
+    'INSERT INTO rate_limits (bucket,win,n,ts) VALUES (?,?,1,?) ON CONFLICT(bucket) DO UPDATE SET n = CASE WHEN win = excluded.win THEN n + 1 ELSE 1 END, win = excluded.win, ts = excluded.ts RETURNING n',
+    [bucket, win, ctx.now()],
   );
   if (r.n > limit) throw new HttpError(429, 'rate_limited', 'too many requests, slow down', { retry_after_s: Math.ceil(((win + 1) * windowMs - ctx.now()) / 1000) });
 }
@@ -58,11 +79,12 @@ export async function authenticate(ctx, req) {
   const ok = key && !key.revoked_at && timingSafeEqualStr(key.hash, await sha256Hex(secret));
   if (!ok) throw new HttpError(401, 'invalid_key', 'API key is invalid or revoked');
   await rateLimit(ctx, `key:${key.id}`, key.rate_per_min);
-  await ctx.db.run('UPDATE api_keys SET last_used_at=? WHERE id=?', [ctx.now(), key.id]);
+  if (!key.last_used_at || ctx.now() - key.last_used_at > 600000) await ctx.db.run('UPDATE api_keys SET last_used_at=? WHERE id=?', [ctx.now(), key.id]); // at most one write per 10 minutes
   const actor = { type: key.kind, keyId: key.id, id: key.user_id || key.site_id || null, scopes: JSON.parse(key.scopes) };
   if (key.kind === 'user') {
     const user = await ctx.db.first('SELECT * FROM users WHERE id=?', [key.user_id]);
     if (!user) throw new HttpError(401, 'invalid_key', 'key owner no longer exists');
+    if (user.status === 'suspended') throw new HttpError(403, 'account_suspended', 'this account is suspended');
     actor.user = user;
   }
   if (key.kind === 'site') {
@@ -89,9 +111,10 @@ export function requireKind(actor, ...kinds) {
 
 export const siteSecret = (ctx, site) => hmacHex(ctx.secret('SITE_SECRET_MASTER'), `site:${site.id}:${site.secret_version}`);
 
-export const signBody = (secret, ts, body) => hmacHex(secret, `${ts}.${body}`);
+/** The signature covers timestamp, HTTP method, path and body, so a signed body cannot be replayed to a different endpoint. */
+export const signBody = (secret, ts, method, path, body) => hmacHex(secret, `${ts}.${String(method).toUpperCase()}.${path}.${body}`);
 
-/** Verify X-PC-Site / X-PC-Timestamp / X-PC-Signature (HMAC-SHA256 over "<ts>.<raw body>"), 5-minute replay window. */
+/** Verify X-PC-Site / X-PC-Timestamp / X-PC-Signature (HMAC-SHA256 over "<ts>.<METHOD>.<path>.<raw body>"), 5-minute replay window. */
 export async function verifySiteSignature(ctx, req, rawBody) {
   const siteId = req.headers.get('x-pc-site');
   const ts = req.headers.get('x-pc-timestamp');
@@ -101,7 +124,7 @@ export async function verifySiteSignature(ctx, req, rawBody) {
   if (!Number.isFinite(t) || Math.abs(ctx.now() - t) > 5 * 60000) throw new HttpError(401, 'stale_signature', 'timestamp outside the 5 minute window');
   const site = await ctx.db.first('SELECT * FROM sites WHERE id=? AND active=1', [siteId]);
   if (!site) throw new HttpError(401, 'invalid_signature', 'unknown site');
-  const expect = await signBody(await siteSecret(ctx, site), ts, rawBody);
+  const expect = await signBody(await siteSecret(ctx, site), ts, req.method, new URL(req.url).pathname, rawBody);
   if (!timingSafeEqualStr(expect, sig.toLowerCase())) throw new HttpError(401, 'invalid_signature', 'signature does not match');
   await rateLimit(ctx, `site:${site.id}`, 600);
   return site;

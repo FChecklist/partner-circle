@@ -1,0 +1,12 @@
+# Names only. For `wrangler pages dev` copy to .dev.vars (git-ignored) and fill with random 32+ char values.
+PC_PEPPER=
+SITE_SECRET_MASTER=
+RAZORPAY_WEBHOOK_SECRET=
+KYC_KEY=
+# Optional, leave empty for mock mail / mock payouts:
+RESEND_API_KEY=
+MAIL_FROM=
+PAYOUT_MODE=
+RAZORPAYX_KEY_ID=
+RAZORPAYX_KEY_SECRET=
+RAZORPAYX_ACCOUNT_NUMBER=

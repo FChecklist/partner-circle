@@ -31,3 +31,5 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 .foot{font-size:11px;color:#6a7580;text-align:center;padding:16px 14px 30px}
 .role{display:block;text-decoration:none;color:inherit}.role:hover{border-color:var(--teal)}
 @media(min-width:600px){main{padding:18px}}
+.mark139{position:absolute;top:0;left:0;right:0;margin:0;padding:1px 0 0;text-align:center;line-height:1;pointer-events:none;user-select:none;z-index:2147483647;font-family:"Noto Sans Devanagari","Mukta","Nirmala UI","Mangal","Kohinoor Devanagari","Devanagari Sangam MN",sans-serif;font-size:6px;font-weight:700;color:#0B2A6B}
+.mark139 span{display:inline-block;border-bottom:.5px solid #7A1010;padding-bottom:.5px}

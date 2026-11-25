@@ -22,6 +22,20 @@ export async function mk(opts = {}) {
   await seedSites(db, T0);
   // stands in for the owner confirming the best-guess hosts (see policy.js DEFAULT_SITES): tests exercise every site
   await db.run('UPDATE sites SET active=1, host_confirmed=1');
+  // The money rules decided on 14 Nov 2026 (the Rs 500 minimum, team share off, the joining bonus, fixed pay days, the 80/20 split and the
+  // Corporate Tambola rates) change the seeded defaults. Every test written before that keeps the plain behaviour it was written for, so it still
+  // tests what it was written to test. A test of the new rules opens the harness with { realDefaults: true } (the genuine seeded values) and may
+  // switch single rules on with opts.payDays / opts.joiningBonus / opts.split.
+  const real = !!opts.realDefaults;
+  const rows = real ? {} : { pay_days: [], joining_bonus_minor: 0, override_bps: { exec: 100, leader: 75, manager: 50 }, min_payout_minor: 100000 };
+  if (opts.payDays) rows.pay_days = opts.payDays;
+  if (opts.joiningBonus != null) rows.joining_bonus_minor = opts.joiningBonus;
+  await db.batch(Object.entries(rows).map(([k, v]) => ({ sql: 'INSERT INTO policy (key,value,updated_at) VALUES (?,?,?)', params: [k, JSON.stringify(v), T0] })));
+  if (!real) {
+    if (!opts.split) await db.run('UPDATE sites SET early_release_bps=0');
+    await db.run("UPDATE sites SET commission_bps=1200, refer_bps=400, discount_allowed=1, max_discount_bps=500 WHERE id='tam'");
+    await db.run("UPDATE sites SET discount_allowed=1, max_discount_bps=500 WHERE id='el'");
+  }
   const mailer = nullMailer();
   const payouts = opts.payouts || mockPayoutAdapter();
   const ctx = makeCtx({ db, env: { ...ENV, ...(opts.env || {}) }, now: () => clock.t, mailer, payouts, engines: opts.engines });

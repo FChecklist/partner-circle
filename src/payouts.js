@@ -3,6 +3,8 @@
 // Rules (owner, 9-11 Nov): a commission is payable only when (1) the sale is recorded and not refunded, (2) Razorpay confirmed
 // the same payment, (3) no claim/chargeback is open on it, and (4) eligible_at has passed (return window + 7-day buffer).
 // No clawback after a payout is SENT. Every payout needs the owner's approval; the AI can prepare but never approve.
+// Pay days (owner, 14 Nov 2026: the 15th and the last day of the month): a payout is requested at any time, remembers the next pay day
+// (payouts.pay_on) and cannot be approved before it, unless the owner approves early on purpose (audited).
 // Payout RECORDING lives here; the money movement itself goes through ctx.payouts (mock by default).
 //
 // The destination (UPI id / bank account) is copied, encrypted, onto the payout when it is requested and only that copy is ever paid to,
@@ -10,7 +12,7 @@
 
 import { HttpError, newId, encryptField, decryptField } from './util.js';
 import { atomic, auditStmts, ledgerStmts } from './chain.js';
-import { getPolicy } from './policy.js';
+import { getPolicy, nextPayDay } from './policy.js';
 import { decryptKyc, kycReviewView, destinationHint } from './users.js';
 import { reconcilePending } from './sales.js';
 import { notify } from './notify.js';
@@ -56,8 +58,11 @@ export async function balances(ctx, userId) {
 export const payoutView = (p) => ({
   id: p.id, user_id: p.user_id, gross_minor: p.gross_minor, tds_bps: p.tds_bps, tds_minor: p.tds_minor, net_minor: p.net_minor, status: p.status,
   method: p.method, destination_masked: p.destination_masked, provider: p.provider, provider_mode: p.provider_mode ?? null, provider_ref: p.provider_ref, paid_ref: p.paid_ref,
-  paid_at: p.paid_at, approved_at: p.approved_at, note: p.note, created_at: p.created_at, reversed_at: p.reversed_at ?? null,
+  paid_at: p.paid_at, approved_at: p.approved_at, note: p.note, created_at: p.created_at, reversed_at: p.reversed_at ?? null, pay_on: p.pay_on ?? null,
 });
+
+/** The calendar day (India time) of an epoch-ms moment, for messages. */
+const dayLabel = (ts) => new Date(ts + 330 * 60000).toISOString().slice(0, 10);
 
 export async function requestPayout(ctx, user) {
   if (user.status !== 'active') throw new HttpError(403, 'not_active', 'your account is not active');
@@ -80,6 +85,7 @@ export async function requestPayout(ctx, user) {
   const tdsBps = india ? policy.tds_bps_default : 0;
   const tds = Math.floor((gross * tdsBps) / 10000);
   const id = newId('po');
+  const payOn = nextPayDay(ctx.now(), policy.pay_days); // null when the owner set no fixed pay days
   const snapshot = india ? { upi_id: kyc.upi_id } : { bank_account: kyc.bank_account, bank_ifsc_swift: kyc.bank_ifsc_swift, bank_name: kyc.bank_name };
   const destEnc = await encryptField(ctx.secret('KYC_KEY'), JSON.stringify({ ...snapshot, name: user.name }));
   try {
@@ -91,13 +97,13 @@ export async function requestPayout(ctx, user) {
       }
       return [
       {
-        sql: `INSERT INTO payouts (id,user_id,gross_minor,tds_bps,tds_minor,net_minor,status,requested_by_key,method,destination_masked,dest_enc,created_at)
-              VALUES (?,?,?,?,?,?, 'pending_approval', ?,?,?,?,?)`,
-        params: [id, user.id, gross, tdsBps, tds, gross - tds, ctx.actor?.keyId || 'system', method, destinationHint(kyc, india), destEnc, ctx.now()],
+        sql: `INSERT INTO payouts (id,user_id,gross_minor,tds_bps,tds_minor,net_minor,status,requested_by_key,method,destination_masked,dest_enc,created_at,pay_on)
+              VALUES (?,?,?,?,?,?, 'pending_approval', ?,?,?,?,?,?)`,
+        params: [id, user.id, gross, tdsBps, tds, gross - tds, ctx.actor?.keyId || 'system', method, destinationHint(kyc, india), destEnc, ctx.now(), payOn],
       },
       ...entries.map((e) => ({ sql: 'INSERT INTO payout_items (ledger_seq,payout_id,amount_minor) VALUES (?,?,?)', params: [e.seq, id, e.amount_minor] })),
       ...(await ledgerStmts(ctx, [{ account_id: user.id, kind: 'payout_reserve', amount_minor: -gross, payout_id: id, eligible_at: ctx.now(), ref: `reserve:${id}`, memo: 'payout requested' }])),
-      ...(await auditStmts(ctx, [{ action: 'payout.request', target: `payout:${id}`, meta: { gross_minor: gross, tds_minor: tds, items: entries.length } }])),
+      ...(await auditStmts(ctx, [{ action: 'payout.request', target: `payout:${id}`, meta: { gross_minor: gross, tds_minor: tds, items: entries.length, pay_on: payOn } }])),
       ];
     });
   } catch (e) {
@@ -157,10 +163,17 @@ export async function rejectPayout(ctx, id, note) {
   return payoutView(await getPayout(ctx, id));
 }
 
-/** Owner approval. Moves pending_approval -> approved, then hands the payout to the provider adapter. */
-export async function approvePayout(ctx, id, { execute = true } = {}) {
+/**
+ * Owner approval. Moves pending_approval -> approved, then hands the payout to the provider adapter.
+ * Before the payout's pay day only `{ early: true }` (the owner choosing on purpose, recorded in the action log) lets it through.
+ */
+export async function approvePayout(ctx, id, { execute = true, early = false } = {}) {
   const p = await getPayout(ctx, id);
   if (p.status !== 'pending_approval') throw new HttpError(409, 'bad_state', `payout is ${p.status}, not pending_approval`);
+  const beforePayDay = p.pay_on != null && ctx.now() < p.pay_on;
+  if (beforePayDay && early !== true) {
+    throw new HttpError(409, 'before_pay_day', `this payout is for the pay day on ${dayLabel(p.pay_on)}; approve it then, or approve it early on purpose`, { pay_on: p.pay_on });
+  }
   const kyc = await ctx.db.first('SELECT status FROM user_kyc WHERE user_id=?', [p.user_id]);
   if (kyc?.status !== 'verified') throw new HttpError(409, 'kyc_required', 'KYC is no longer verified for this partner');
   await atomic(ctx, async () => {
@@ -172,7 +185,7 @@ export async function approvePayout(ctx, id, { execute = true } = {}) {
     if (bad) throw new HttpError(409, 'sale_changed', 'a sale in this payout was refunded or put on hold; reject the payout');
     return [
       { sql: "UPDATE payouts SET status='approved', approved_by_key=?, approved_at=? WHERE id=? AND status='pending_approval'", params: [ctx.actor.keyId, ctx.now(), id] },
-      ...(await auditStmts(ctx, [{ action: 'payout.approve', target: `payout:${id}`, meta: { gross_minor: p.gross_minor, net_minor: p.net_minor } }])),
+      ...(await auditStmts(ctx, [{ action: 'payout.approve', target: `payout:${id}`, meta: { gross_minor: p.gross_minor, net_minor: p.net_minor, pay_on: p.pay_on ?? null, early_approval: beforePayDay } }])),
     ];
   });
   return execute ? executePayout(ctx, id) : payoutView(await getPayout(ctx, id));
@@ -271,7 +284,7 @@ export async function approvalQueue(ctx) {
   for (const k of kycRows) kyc.push({ ...k, payout_details_changed: k.verified_before > 0, details: await kycReviewView(ctx, k.user_id) });
   const payouts = await ctx.db.all(
     `SELECT p.*, u.name, u.handle,
-        (SELECT COUNT(*) FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq JOIN sales s ON s.id = l.sale_id
+        (SELECT COUNT(DISTINCT l.sale_id) FROM payout_items pi JOIN ledger l ON l.seq = pi.ledger_seq JOIN sales s ON s.id = l.sale_id
           WHERE pi.payout_id = p.id AND (s.refund_after_payout = 1 OR s.status = 'refunded')) AS flagged_refunds
        FROM payouts p JOIN users u ON u.id = p.user_id WHERE p.status = 'pending_approval' ORDER BY p.created_at`);
   const claims = await ctx.db.all(

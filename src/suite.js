@@ -30,7 +30,8 @@ export async function getProfile(ctx) {
 
 export const publicBrand = async (ctx) => {
   const p = await getProfile(ctx);
-  return { product_name: p.product_name, accent: p.accent, logo_url: p.logo_url, currency_label: p.currency_label, credits_per_usd: p.credits_per_usd };
+  // payee_name: who receives the customer's payment, read from this record and shown on the pages, never written into them (owner rule, 29 Oct 2026)
+  return { product_name: p.product_name, accent: p.accent, logo_url: p.logo_url, currency_label: p.currency_label, credits_per_usd: p.credits_per_usd, payee_name: p.payee_name };
 };
 
 const bit = (v) => v === 0 || v === 1;
@@ -41,6 +42,7 @@ const PROFILE_RULES = {
   logo_url: (v) => v === null || (typeof v === 'string' && v.length <= 200 && /^https:\/\/[a-z0-9.-]+(\/[^\s"'<>]*)?$/i.test(v)),
   currency_label: (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9 ]{1,23}$/.test(v),
   credits_per_usd: (v) => isInt(v, 1, 100000),
+  payee_name: (v) => typeof v === 'string' && /^[^<>\u0000-\u001f]{2,80}$/.test(v.trim()),
   commission_dest: (v) => v === 'ledger' || v === 'moneypenny',
   mnp_enabled: bit,
   mono_enabled: bit,
@@ -150,7 +152,7 @@ export function moneypennyLines(prof, d) {
   const label = prof.currency_label;
   const cents = usdCents(d.credits, prof.credits_per_usd);
   const lines = {
-    owned: `${d.credits.toLocaleString('en-US')} ${label} (credits) owned = US$${money(cents)}${d.inr_minor != null ? ` (about Rs ${money(d.inr_minor)})` : ''}`,
+    owned: `${d.credits.toLocaleString('en-US')} ${label} (credits) owned = US$${money(cents)}${d.inr_minor != null ? ` (about ₹${money(d.inr_minor)})` : ''}`,
     rate: `${prof.credits_per_usd} ${label} = 1 US$`,
     convert: null,
   };
@@ -233,6 +235,17 @@ const MATURED = `FROM ledger l JOIN sales s ON s.id = l.sale_id JOIN users u ON 
    AND NOT EXISTS (SELECT 1 FROM mp_postings mp WHERE mp.ledger_seq = l.seq)`;
 
 /**
+ * The sale reference Moneypenny sees for one ledger entry. A sale can carry several entries for the same payment (the early part, the last
+ * part and the joining bonus), and each needs its own reference or Moneypenny would take the second one as a repeat of the first.
+ */
+export function postingSaleRef(r) {
+  const base = r.kind === 'commission' ? r.pid : `${r.pid}:override:${r.account_id}`;
+  if (/^(commission|override)-final:/.test(r.ref)) return `${base}:final`;
+  if (/^bonus:/.test(r.ref)) return `${base}:bonus`;
+  return base;
+}
+
+/**
  * Step 1 (claim): matured entries move from the payout path to the Moneypenny path in ONE atomic batch (claim row + a reserve entry that keeps
  * the ledger balanced + an action-log entry). Step 2 (deliver): each claim is sent to Moneypenny with a stable event key; an unknown outcome is retried
  * with the same key, so it can never pay twice. Only runs when the owner chose commission_dest='moneypenny'.
@@ -246,7 +259,7 @@ export async function runPostings(ctx, { userId = null, limit = 25 } = {}) {
     const rows = await ctx.db.all(`SELECT l.seq, l.account_id, l.kind, l.amount_minor, l.ref, l.eligible_at, s.razorpay_payment_id AS pid ${MATURED} ${userId ? 'AND l.account_id=?' : ''} ORDER BY l.seq LIMIT ?`,
       userId ? [ctx.now(), userId, limit] : [ctx.now(), limit]);
     for (const r of rows) {
-      const saleRef = r.kind === 'commission' ? r.pid : `${r.pid}:override:${r.account_id}`;
+      const saleRef = postingSaleRef(r);
       try {
         let did = false;
         await atomic(ctx, async () => {

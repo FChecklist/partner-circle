@@ -97,8 +97,9 @@ export async function createUser(ctx, { role, name, email, phone, country = 'IN'
   try {
     await atomic(ctx, async () => [
       {
-        sql: 'INSERT INTO users (id,role,name,handle,email,email_hash,phone,country,parent_id,email_verified,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)',
-        params: [id, role, name, handle, email, emailHash, phone, cc, parent_id, st, ctx.now()],
+        sql: 'INSERT INTO users (id,role,name,handle,email,email_hash,phone,country,parent_id,email_verified,status,approved_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,?)',
+        // approved_at starts the joining-bonus window; Refer and Earn people are never "approved" by the owner, so they have none
+        params: [id, role, name, handle, email, emailHash, phone, cc, parent_id, st, st === 'active' && role !== 'refer' ? ctx.now() : null, ctx.now()],
       },
       ...(await auditStmts(ctx, [{ action: 'user.create', target: `user:${id}`, meta: { role, status: st, parent_id } }])),
     ]);
@@ -129,7 +130,8 @@ export async function setStatus(ctx, userId, status, why) {
   if (!u) throw new HttpError(404, 'not_found', 'user not found');
   if (u.status === status) return u;
   await atomic(ctx, async () => [
-    { sql: 'UPDATE users SET status=? WHERE id=?', params: [status, userId] },
+    // the first time a partner becomes active is the approval moment that starts the joining-bonus window; reinstating later does not restart it
+    { sql: "UPDATE users SET status=?, approved_at=CASE WHEN ?='active' AND role<>'refer' THEN COALESCE(approved_at, ?) ELSE approved_at END WHERE id=?", params: [status, status, ctx.now(), userId] },
     ...(await auditStmts(ctx, [{ action: `user.${status}`, target: `user:${userId}`, meta: { from: u.status, why: why || null } }])),
   ]);
   if (status === 'active' && u.status === 'pending') {

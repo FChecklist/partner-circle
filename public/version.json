@@ -3,9 +3,9 @@
   "version": "1.0.9",
   "releasedAt": "2026-11-25T20:45:00Z",
   "releasedAtIST": "26 Nov 2026 02:15 IST",
-  "commit": "07858884eccf945826fb6061644962cc6a3cf4a4",
+  "commit": "344844531dbea853c38e9bb01dad3eb6d46af022",
   "changes": [
-    "1.0.9: the joining bonus is for a Growth Partner only (not staff roles); wording guard has a second net that does not depend on the string reader; no tick box in any file under public; an AI key cannot approve early; the payee default is not typed into any file; commit e49c50a7 is the build this patch is on, this release is commit 07858884",
+    "1.0.9: the joining bonus is for a Growth Partner only (not staff roles); wording guard has a second net that does not depend on the string reader; no tick box in any file under public; an AI key cannot approve early; the payee default is not typed into any file; commit e49c50a7 is the build this patch is on, this release is commit 34484453",
     "1.0.8: audit fixes: no my/your wording anywhere a person reads, no tick boxes (selects instead), joining bonus once by the database, held bonus text; commit 74141bad is the build this patch is on",
     "1.0.7: money rules rechecked (minimum 500 rupees, 80/20 split for money-back products, pay days 15 and last day, joining bonus, team share off, Corporate Tambola 25%, payee read from record, rupee sign); dashboard contract",
     "1.0.6: site signature covers method and path; Razorpay dedupe from signed body; privacy retention lines; small fixes",

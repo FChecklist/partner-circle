@@ -3,12 +3,16 @@
 // A "sale completed" event comes from one of our sites (signed). We attribute it (code > prospect > click > lead), post commission
 // and upline override entries to the append-only ledger, and set when they mature:
 //   eligible_at = max(paid_at, now - max_backdate_days) + (site.return_days + site.buffer_days)   (37 days Veridian/PROJEXA, 7 days games/Townhall)
+// Products with a money-back window pay in two parts (owner, 14 Nov 2026: 80% after 7 days, the rest after the money-back days): the
+// commission becomes TWO ledger entries, the early part at clock + buffer_days and the final part at eligible_at. A refund voids both.
+// The joining bonus (owner, 14 Nov 2026: 500 rupees with the first sale, gone if no first sale within 30 days of approval) is one more
+// 'commission' entry on that first sale, so a refund of that sale takes it back too, and the ledger ref `bonus:<user>` allows it only once.
 // Money only becomes payable once Razorpay has confirmed the same payment (rzp_status = 'confirmed'), the sale is not refunded and
 // no claim/chargeback is open on it. One Razorpay payment id belongs to exactly one sale.
 
 import { HttpError, newId, needStr, isInt, DAY, normEmail } from './util.js';
 import { atomic, auditStmts, ledgerStmts } from './chain.js';
-import { getPolicy, holdDays } from './policy.js';
+import { getPolicy, holdDays, earlyShareBps, splitAmount } from './policy.js';
 import { RANK, uplineOf } from './users.js';
 import { notify } from './notify.js';
 
@@ -16,7 +20,8 @@ const MAX_AMOUNT = 100_000_000_00; // Rs 10 crore in paise: a sanity cap, not a 
 
 export const saleView = (s) => ({
   id: s.id, site_id: s.site_id, order_id: s.order_id, amount_minor: s.amount_minor, net_minor: s.net_minor, currency: s.currency,
-  paid_at: s.paid_at, eligible_at: s.eligible_at, attribution: s.attribution, status: s.status, block_reason: s.block_reason,
+  paid_at: s.paid_at, eligible_at: s.eligible_at, early_release_bps: s.early_release_bps ?? 0, early_eligible_at: s.early_eligible_at ?? null,
+  attribution: s.attribution, status: s.status, block_reason: s.block_reason,
   rzp_status: s.rzp_status, refunded_at: s.refunded_at, refund_after_payout: !!s.refund_after_payout,
   dispute_status: s.dispute_status ?? null, usage_verified: s.usage_verified == null ? null : !!s.usage_verified,
 });
@@ -78,6 +83,33 @@ async function rzpState(ctx, paymentId, amount, orderId) {
   return 'confirmed';
 }
 
+/**
+ * Joining bonus (owner, 14 Nov 2026): a Growth Partner (role `partner`; not Refer and Earn people, not the Executive, Team Leader or Sales Manager staff) gets a fixed amount with the FIRST sale, as long as that sale was paid within
+ * `joining_bonus_valid_days` of the owner's approval. After that window the bonus is gone. One bonus per person, ever (the ledger ref is
+ * unique and is also checked here). It is a 'commission' entry on the first sale, mature when that sale is fully mature, so a refund of the
+ * sale voids it together with the commission. Returns the ledger entry, or null when no bonus applies.
+ */
+async function joiningBonusEntry(ctx, user, policy, { saleId, paidAt, eligibleAt }) {
+  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role !== 'partner') return null;
+  if (paidAt > user.approved_at + policy.joining_bonus_valid_days * DAY) return null;
+  const ref = `bonus:${user.id}`;
+  if (await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [ref])) return null;
+  return { account_id: user.id, kind: 'commission', amount_minor: policy.joining_bonus_minor, sale_id: saleId, eligible_at: eligibleAt, ref, memo: 'joining bonus with the first sale' };
+}
+
+/** Where a partner's joining bonus stands, for the screen: none (no bonus for this person), open (waiting for a first sale), earned, voided (its sale was refunded) or gone (the window passed). */
+export async function bonusStatus(ctx, user, policy) {
+  if (!(policy.joining_bonus_minor > 0) || !user.approved_at || user.role !== 'partner') return { state: 'none' };
+  const expires_at = user.approved_at + policy.joining_bonus_valid_days * DAY;
+  const row = await ctx.db.first('SELECT id, eligible_at FROM ledger WHERE ref=?', [`bonus:${user.id}`]);
+  let state = ctx.now() <= expires_at ? 'open' : 'gone';
+  if (row) state = (await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [`void:${row.id}`])) ? 'voided' : 'earned';
+  const out = { state, amount_minor: policy.joining_bonus_minor, expires_at };
+  // while the money is held (the wait period) the screen says so, with the date it becomes eligible
+  if (state === 'earned') { out.eligible_at = row.eligible_at; out.held = row.eligible_at > ctx.now(); }
+  return out;
+}
+
 export async function recordSale(ctx, site, body) {
   const p = parseSale(body, ctx.now());
   const dup = await ctx.db.first('SELECT * FROM sales WHERE site_id=? AND order_id=?', [site.id, p.order_id]);
@@ -108,16 +140,25 @@ export async function recordSale(ctx, site, body) {
   const clockStart = Math.max(p.paid_at, ctx.now() - policy.max_backdate_days * DAY);
   const holdD = holdDays(site);
   const eligible = clockStart + holdD * DAY;
+  // Split release: the early share of every commission matures after buffer_days, the rest after the whole hold. 0 = no split for this product.
+  const early = earlyShareBps(site);
+  const earlyEligible = early ? clockStart + site.buffer_days * DAY : null;
   const id = newId('sl');
   const rzp = await rzpState(ctx, rzpPaymentId, p.amount_minor, body.razorpay_order_id || null);
 
   const entries = [];
-  const summary = { commission_minor: 0, overrides: [] };
+  const summary = { commission_minor: 0, overrides: [], bonus_minor: 0 };
+  /** One commission/override as one entry, or two when this product pays in two parts. The early part keeps the plain ref; the rest gets `-final`. */
+  const addSplit = (kind, accountId, amt, ref, memo) => {
+    const [a, b] = splitAmount(amt, early);
+    if (a > 0) entries.push({ account_id: accountId, kind, amount_minor: a, sale_id: id, eligible_at: early ? earlyEligible : eligible, ref, memo });
+    if (b > 0) entries.push({ account_id: accountId, kind, amount_minor: b, sale_id: id, eligible_at: eligible, ref: ref.replace(`${kind}:`, `${kind}-final:`), memo: `${memo} (last part)` });
+  };
   if (user && status === 'recorded') {
     const rate = user.role === 'refer' ? site.refer_bps : site.commission_bps;
     const amt = Math.floor((net * rate) / 10000);
     if (amt > 0) {
-      entries.push({ account_id: user.id, kind: 'commission', amount_minor: amt, sale_id: id, eligible_at: eligible, ref: `commission:${id}:${user.id}`, memo: `${site.id} order ${p.order_id}` });
+      addSplit('commission', user.id, amt, `commission:${id}:${user.id}`, `${site.id} order ${p.order_id}`);
       summary.commission_minor = amt;
     }
     for (const up of await uplineOf(ctx, user.id)) {
@@ -125,26 +166,44 @@ export async function recordSale(ctx, site, body) {
       if (up.status !== 'active' || !bps || RANK[up.role] <= RANK[user.role]) continue;
       const o = Math.floor((net * bps) / 10000);
       if (o > 0) {
-        entries.push({ account_id: up.id, kind: 'override', amount_minor: o, sale_id: id, eligible_at: eligible, ref: `override:${id}:${up.id}`, memo: `team sale by ${user.handle}` });
+        addSplit('override', up.id, o, `override:${id}:${up.id}`, `team sale by ${user.handle}`);
         summary.overrides.push({ user_id: up.id, amount_minor: o });
       }
     }
   }
 
   const actorCtx = { ...ctx, actor: { type: 'site', id: site.id } };
+  // The database decides who gets the joining bonus: ledger.ref is UNIQUE, so a second `bonus:<user>` row is refused. The SELECT in
+  // joiningBonusEntry is only a shortcut. If another writer got in between, the refusal means "already paid": the sale is written again without it.
+  let skipBonus = false;
+  const write = () => atomic(ctx, async () => {
+      // The joining bonus is decided INSIDE the builder: two first sales landing together rebuild here and only one of them gets it.
+      const bonus = user && status === 'recorded' && !skipBonus ? await joiningBonusEntry(ctx, user, policy, { saleId: id, paidAt: p.paid_at, eligibleAt: eligible }) : null;
+      summary.bonus_minor = bonus ? bonus.amount_minor : 0;
+      return [
+        {
+          sql: `INSERT INTO sales (id,site_id,order_id,amount_minor,tax_minor,net_minor,currency,paid_at,hold_days,eligible_at,early_release_bps,early_eligible_at,user_id,attribution,click_id,code,customer_hash,
+                  razorpay_payment_id,razorpay_order_id,rzp_status,status,block_reason,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          params: [id, site.id, p.order_id, p.amount_minor, p.tax_minor, net, p.currency, p.paid_at, holdD, eligible, early, earlyEligible, user?.id ?? null, attr.attribution, attr.click_id ?? null,
+            attr.code ?? null, customerHash, rzpPaymentId, body.razorpay_order_id || null, rzp, status, blockReason, ctx.now()],
+        },
+        ...(await ledgerStmts(ctx, bonus ? [...entries, bonus] : entries)),
+        ...(await auditStmts(actorCtx, [{ action: status === 'blocked' ? 'sale.blocked' : 'sale.recorded', target: `sale:${id}`,
+          meta: { site_id: site.id, order_id: p.order_id, net_minor: net, attribution: attr.attribution, partner: user?.id ?? null, reason: blockReason, eligible_at: eligible,
+            early_eligible_at: earlyEligible, early_release_bps: early, bonus_minor: summary.bonus_minor } }])),
+      ];
+  });
   try {
-    await atomic(ctx, async () => [
-      {
-        sql: `INSERT INTO sales (id,site_id,order_id,amount_minor,tax_minor,net_minor,currency,paid_at,hold_days,eligible_at,user_id,attribution,click_id,code,customer_hash,
-                razorpay_payment_id,razorpay_order_id,rzp_status,status,block_reason,created_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        params: [id, site.id, p.order_id, p.amount_minor, p.tax_minor, net, p.currency, p.paid_at, holdD, eligible, user?.id ?? null, attr.attribution, attr.click_id ?? null,
-          attr.code ?? null, customerHash, rzpPaymentId, body.razorpay_order_id || null, rzp, status, blockReason, ctx.now()],
-      },
-      ...(await ledgerStmts(ctx, entries)),
-      ...(await auditStmts(actorCtx, [{ action: status === 'blocked' ? 'sale.blocked' : 'sale.recorded', target: `sale:${id}`,
-        meta: { site_id: site.id, order_id: p.order_id, net_minor: net, attribution: attr.attribution, partner: user?.id ?? null, reason: blockReason, eligible_at: eligible } }])),
-    ]);
+    try {
+      await write();
+    } catch (e) {
+      const bonusRef = user && `bonus:${user.id}`;
+      if (!bonusRef || !/UNIQUE constraint failed: ledger\.ref/.test(String(e?.message)) || !(await ctx.db.first('SELECT 1 AS x FROM ledger WHERE ref=?', [bonusRef]))) throw e;
+      skipBonus = true;
+      summary.bonus_minor = 0;
+      await write();
+    }
   } catch (e) {
     if (attr.consumedCode) await ctx.db.run('UPDATE codes SET used_count = used_count - 1 WHERE id=? AND used_count > 0', [attr.consumedCode]);
     if (/UNIQUE constraint failed: sales\.site_id, sales\.order_id/.test(String(e.message))) {
@@ -183,7 +242,7 @@ async function cancelWaitingPayouts(ctx, saleId, why) {
 }
 
 const tellCancelled = (ctx, payouts) =>
-  Promise.all(payouts.map((p) => notify(ctx, p.user_id, 'Your payout request was cancelled', 'A sale in your payout request was refunded or put on hold, so the request was cancelled and the money is back in your balance. You can request a payout again.')));
+  Promise.all(payouts.map((p) => notify(ctx, p.user_id, 'The payout request was cancelled', 'A sale in the payout request was refunded or put on hold, so the request was cancelled and the money is back in the balance. A new payout can be requested.')));
 
 /**
  * Apply a refund. Commission not yet sent is voided. Commission already SENT to the partner (payout processing or paid) is NOT clawed

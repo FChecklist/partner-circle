@@ -3,7 +3,7 @@
 import { HttpError, json, isInt, needStr, isHostname, hostIsOwned } from './util.js';
 import { authenticate, bearer, requireScope, requireKind, rateLimit, verifySiteSignature, createKey, revokeKey, siteSecret, OWNER_ONLY_SCOPES } from './auth.js';
 import { atomic, auditStmts, audit, verifyLedger, verifyAudit } from './chain.js';
-import { getPolicy, POLICY_VALIDATORS, defaultRefundTerms } from './policy.js';
+import { getPolicy, POLICY_VALIDATORS, defaultRefundTerms, payoutWaitText, nextPayDay } from './policy.js';
 import * as U from './users.js';
 import * as L from './links.js';
 import * as S from './sales.js';
@@ -28,9 +28,10 @@ const route = (method, pattern, opts, fn) => {
 route('GET', '/v1/health', { auth: 'public' }, async ({ ctx }) => ({ ok: true, time: ctx.now() }));
 
 // refund_terms is what a site shows the buyer BEFORE they pay (the owner's wording, or a clearly-marked draft default).
+// payout_wait is one plain sentence per product about when a partner's commission is paid (owner review, 14 Nov 2026: the wait is shown next to each product).
 route('GET', '/v1/public/sites', { auth: 'public', cors: true }, async ({ ctx }) =>
-  (await ctx.db.all('SELECT id,name,host,discount_allowed,max_discount_bps,return_days,refund_terms FROM sites WHERE active=1 ORDER BY name'))
-    .map((s) => ({ ...s, refund_terms: s.refund_terms || defaultRefundTerms(s) })));
+  (await ctx.db.all('SELECT id,name,host,discount_allowed,max_discount_bps,return_days,buffer_days,early_release_bps,refund_terms FROM sites WHERE active=1 ORDER BY name'))
+    .map(({ buffer_days, early_release_bps, ...s }) => ({ ...s, refund_terms: s.refund_terms || defaultRefundTerms(s), payout_wait: payoutWaitText({ ...s, buffer_days, early_release_bps }) })));
 
 // (idem:false: the response holds a login key, which must never be cached)
 route('POST', '/v1/register', { auth: 'public', ipLimit: [10, 3600000], idem: false }, async ({ ctx, body }) => {
@@ -94,7 +95,7 @@ route('GET', '/v1/me/export', me, async ({ ctx, actor }) => {
     ledger: await ctx.db.all('SELECT seq, kind, amount_minor, eligible_at, ref, memo, ts AS created_at FROM ledger WHERE account_id=? ORDER BY seq', [u.id]),
     payouts: await P.listPayouts(ctx, u.id),
     prospects: await PR.listProspects(ctx, u.id),
-    shared_with: ['Moneypenny (name, e-mail)', 'Corporate Monopoly (name, e-mail, team)', 'Razorpay / RazorpayX (payout destination, at payout time)'],
+    shared_with: ['Moneypenny (name, e-mail)', 'Corporate Monopoly (name, e-mail, team)', 'Razorpay (payout destination, at payout time)'],
   };
 });
 route('POST', '/v1/me/erase-request', me, async ({ ctx, actor }) => {
@@ -111,7 +112,7 @@ route('POST', '/v1/me/keys/rotate', { ...me, idem: false }, async ({ ctx, actor 
   const k = await createKey(ctx, { kind: 'user', user_id: actor.user.id, label: 'rotated by owner of the account', created_by: actor.keyId },
     { audit: (nk) => [{ action: 'key.rotate', target: `key:${nk.id}`, meta: { replaces: actor.keyId, user_id: actor.user.id } }] });
   await revokeKey(ctx, actor.keyId);
-  return { api_key: k.token, note: 'The old key no longer works. Store this one safely. If you did not do this yourself, tell the owner at once: whoever rotated may have had your old key.' };
+  return { api_key: k.token, note: 'The old key no longer works. Store this one safely. If you did not do this yourself, tell the owner at once: whoever rotated may have had the old key.' };
 });
 route('GET', '/v1/leaderboard', me, async ({ ctx, actor }) => ({
   // Anonymous: other members' names and handles are not shown (privacy, and handles let anyone pick a sponsor to poach). Only your own row is named.
@@ -126,6 +127,7 @@ route('GET', '/v1/me/summary', me, async ({ ctx, actor }) => {
   const TEAM = `WITH RECURSIVE t(id, depth) AS (SELECT id, 1 FROM users WHERE parent_id = ? UNION ALL SELECT x.id, t.depth + 1 FROM users x JOIN t ON x.parent_id = t.id WHERE t.depth < 6)`;
   const teamSize = await n(`${TEAM} SELECT COUNT(*) AS n FROM t`, [u.id]);
   const teamNet = await n(`${TEAM} SELECT SUM(net_minor) AS n FROM sales WHERE status='recorded' AND paid_at >= ? AND user_id IN (SELECT id FROM t)`, [u.id, since]);
+  const policy = await getPolicy(ctx);
   return {
     role: u.role, status: u.status, email_verified: !!u.email_verified,
     last_30_days: {
@@ -138,6 +140,9 @@ route('GET', '/v1/me/summary', me, async ({ ctx, actor }) => {
     team_size: teamSize,
     balance: await P.balances(ctx, u.id),
     kyc_status: (await U.kycView(ctx, u.id)).status,
+    // the next day a requested payout can be paid (India time, epoch ms; null when no fixed pay days are set) and the state of the joining bonus
+    next_pay_day: nextPayDay(ctx.now(), policy.pay_days),
+    joining_bonus: await S.bonusStatus(ctx, u, policy),
   };
 });
 
@@ -263,6 +268,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const bit = (v) => v === 0 || v === 1;
   const rules = {
     commission_bps: (v) => isInt(v, 0, 5000), refer_bps: (v) => isInt(v, 0, 5000), return_days: (v) => isInt(v, 0, 365), buffer_days: (v) => isInt(v, 0, 60),
+    early_release_bps: (v) => isInt(v, 0, 9999), // share of each commission paid after buffer_days; the rest after the whole hold (0 = no split)
     discount_allowed: bit, max_discount_bps: (v) => isInt(v, 0, 5000), active: bit, host_confirmed: bit,
     // a redirect host must be one of the owner's own domains (policy.owned_domains), so a typo or a bad edit can never send partner traffic elsewhere
     host: (v) => isHostname(v) && hostIsOwned(v, policy.owned_domains),
@@ -273,7 +279,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const b = body || {};
   for (const [k, v] of Object.entries(b)) {
     if (!Object.hasOwn(rules, k)) throw new HttpError(422, 'unknown_field', `${k} cannot be changed here`);
-    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'host must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
+    if (!rules[k](v)) throw new HttpError(422, 'invalid_field', k === 'host' ? 'the site address must be a hostname on one of the owned domains (policy.owned_domains)' : `${k} out of range`);
     sets.push(`${k}=?`); vals.push(typeof v === 'string' ? v.trim() : v);
   }
   if (!sets.length) throw new HttpError(422, 'invalid_body', 'nothing to change');
@@ -281,7 +287,7 @@ route('PATCH', '/v1/admin/sites/:id', adm('policy.write'), async ({ ctx, params,
   const hostChanged = b.host !== undefined && b.host !== site.host;
   const confirmed = b.host_confirmed ?? (hostChanged ? 0 : site.host_confirmed);
   if (hostChanged && b.host_confirmed === undefined) { sets.push('host_confirmed=?'); vals.push(0); }
-  if (b.active === 1 && !confirmed) throw new HttpError(409, 'host_unconfirmed', 'confirm the host first (host_confirmed:1) before switching this site on');
+  if (b.active === 1 && !confirmed) throw new HttpError(409, 'host_unconfirmed', 'confirm the site address first (host_confirmed:1) before switching this site on');
   if (!confirmed && b.active === undefined && site.active === 1) { sets.push('active=?'); vals.push(0); }
   await atomic(ctx, async () => [
     { sql: `UPDATE sites SET ${sets.join(',')} WHERE id=?`, params: [...vals, params.id] },
@@ -339,7 +345,8 @@ route('GET', '/v1/admin/payouts', adm('admin.read'), async ({ ctx, url }) => {
   const rows = await ctx.db.all(`SELECT p.*, u.name FROM payouts p JOIN users u ON u.id = p.user_id ${st ? 'WHERE p.status=?' : ''} ORDER BY p.created_at DESC LIMIT 200`, st ? [st] : []);
   return { payouts: rows.map((p) => ({ ...P.payoutView(p), name: p.name })) };
 });
-route('POST', '/v1/admin/payouts/:id/approve', adm('payouts.approve'), async ({ ctx, params }) => P.approvePayout(ctx, params.id));
+// body {early:true} = the owner chooses to pay before the payout's pay day (recorded in the action log); without it an early approval is refused
+route('POST', '/v1/admin/payouts/:id/approve', adm('payouts.approve'), async ({ ctx, params, body }) => P.approvePayout(ctx, params.id, { early: body?.early === true }));
 route('POST', '/v1/admin/payouts/:id/reject', adm('payouts.approve'), async ({ ctx, params, body }) => P.rejectPayout(ctx, params.id, body?.note));
 route('POST', '/v1/admin/payouts/:id/execute', adm('payouts.approve'), async ({ ctx, params }) => P.executePayout(ctx, params.id));
 route('POST', '/v1/admin/payouts/:id/mark-paid', adm('payouts.approve'), async ({ ctx, params, body }) => {

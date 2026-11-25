@@ -1,6 +1,6 @@
 {
   "name": "partner-circle",
-  "version": "1.0.6",
+  "version": "1.0.9",
   "private": true,
   "type": "module",
   "description": "Partner Circle: standalone growth-partner portal and integration API (Cloudflare Pages Functions + D1)",

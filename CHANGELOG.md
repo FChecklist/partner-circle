@@ -2,6 +2,36 @@
 
 Format: newest first. Every release also updates `public/version.json` (shown in the page footer) and `package.json`.
 
+## 1.0.9 - 26 Nov 2026
+Fixes after two more audits of 1.0.8 (build e49c50a7; not deployed yet).
+- Joining bonus: only for a Growth Partner (role `partner`), as the owner decided on 14 Nov. Sales Manager, Team Leader and Executive are staff on a salary plan and get none; Refer and Earn people still get none. The summary says `none` for them. Tested with a manager and a partner making a first sale each.
+- An AI key that sends `early: true` with a payout approval is refused (403) and nothing is approved or logged as approved; tested (the route was already owner-only, the test now says so).
+- The wording guard has a second net that reads every code line of the shipped scripts without using the string reader, so a possessive cannot hide behind a regex literal or a nested template; the string reader itself is tested on those cases. The earlier note's "about 85 places" is the number of places that were changed, not a number left undone; both scans find none today.
+- No tick box: the scan now covers every script, page and style file under `public`, and a checkbox or radio set through `setAttribute`.
+- The payee: the default payee name read from the record appears in no shipped script, page or style (before, only one exact phrase was checked).
+- Two owner documents (`docs/OWNER-DECISIONS.md` item 10 and `docs/MONEY-RULES-RECHECK-2026-11-25.md` question 10) still said the wording sweep was open; they now say it was done in 1.0.8. The Terms page sentence about buying through a personal link reads plainly again.
+
+## 1.0.8 - 25 Nov 2026
+Audit fixes on top of build 74141bad (this entry's commit is the one that applies the patch; `public/version.json` carries it once committed).
+- Wording: no my, mine, your or yours in any screen, page, error message or e-mail text (about 85 places, including the privacy notice and the Terms page: **a person should read those two once**). A scan test fails on any such word except the exact sentence "Copy this link and paste in your AI to work."
+- No tick boxes: "Remember on this device" is now a choice "After signing in"; the owner policy switches (CA confirmed, discount codes, site address confirmed, site live) are selects. A scan test fails if a checkbox returns. "Host" in screens reads "site address".
+- Joining bonus: the database already refuses a second `bonus:<person>` ledger row (unique `ledger.ref`); a refusal is now treated as "already paid" and the sale is written without the bonus, instead of failing the whole sale. Tested with a stale read and with two parallel first sales. No migration needed.
+- A joining bonus that is still held says so on the Earnings screen with its eligible date, and every product's `payout_wait` says a joining bonus is held until it is eligible.
+
+## 1.0.7 - 25 Nov 2026
+Money rules rechecked against the owner's decisions (full table: `docs/MONEY-RULES-RECHECK-2026-11-25.md`). Money stays OFF; migration 0007 is a draft the owner applies after the audits.
+- Minimum payout is 500 rupees (was 1,000).
+- Money-back products pay 80% of each commission after 7 days and the last 20% after 37 (new `sites.early_release_bps`). A refund cancels both parts, or only the unsent part when the first was already sent.
+- Pay days: a payout waits for the 15th or the last day of the month; the owner can approve early on purpose, and it is logged.
+- Joining bonus of 500 rupees with the first sale, if that sale is paid within 30 days of approval. Once per person. A refund of that sale takes it back.
+- Team share is OFF until the owner decides. Corporate Tambola pays 25% to Growth Partners and to Refer and Earn. No discount codes on the games and Townhall products.
+- The payee name is read from the payee record (`tenant_profile.payee_name`), no longer typed into the pages. Screens say Razorpay, not RazorpayX, and use the rupee sign. Each product shows its own payout wait.
+- Moneypenny: each part of a split sale and the bonus is its own credit with its own sale reference.
+- Owner queue counts flagged sales, not the ledger parts of one sale.
+- Dashboard design and API contract written (`docs/DASHBOARD-OVER-MONEYPENNY-AND-MONOPOLY.md`) with a test that compares it with the real answer.
+- Added a CI workflow (`.github/workflows/ci.yml`): build and tests on Node 22 and 24.
+- Migration 0007 is tested on a database that already holds rows (`test/migration-0007.test.js`), not only on an empty one.
+
 ## 1.0.6 - 23 Nov 2026
 - Site calls are now signed over time, method, path and body, so a signed sale cannot be replayed against another endpoint (sites must update their signing line; see docs/INTEGRATION.md).
 - Razorpay events are de-duplicated by the event type and entity id inside the signed body, not by a header anyone could change.

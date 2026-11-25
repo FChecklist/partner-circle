@@ -33,7 +33,6 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 @media(min-width:600px){main{padding:18px}}
 .toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#1c2b3a;color:#fff;padding:8px 14px;border-radius:99px;font-size:13px;z-index:9;max-width:90vw}.toast.bad{background:var(--r)}
 .btn[disabled]{opacity:.45;cursor:not-allowed}.rolebar a{margin-left:auto}
-input.auto{width:auto;margin:0 6px 0 0}
 textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font:inherit;margin:4px 0 8px}
 label{display:block}
 .page{max-width:42rem;margin:2rem auto;padding:0 1rem}

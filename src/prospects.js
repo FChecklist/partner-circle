@@ -10,7 +10,7 @@ import { getPolicy } from './policy.js';
 import { rateLimit } from './auth.js';
 
 export async function registerProspect(ctx, user, body) {
-  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'your account is not active yet');
+  if (user.status !== 'active') throw new HttpError(403, 'not_active', 'the account is not active yet');
   if (user.role === 'refer') throw new HttpError(403, 'not_allowed', 'prospect registration is for partners and sales staff');
   const site = await ctx.db.first('SELECT * FROM sites WHERE id=? AND active=1', [body.site_id]);
   if (!site) throw new HttpError(404, 'site_not_found', 'unknown or inactive site');

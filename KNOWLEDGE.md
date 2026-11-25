@@ -1,7 +1,7 @@
 # Partner Circle: knowledge file
 
 ## Version
-- Current version: **1.0.6** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
+- Current version: **1.0.9** (see `public/version.json`, which lives in `public/` so the page footer can read it; shown in the page footer, and `CHANGELOG.md` for version notes).
 - Rule (owner order, 21 Nov 2026): every product, site and page update carries a version number and version notes, saved in git. Bump `package.json`, `public/version.json` and add a `CHANGELOG.md` entry for every release.
 
 ## Where things are
@@ -14,3 +14,7 @@
 - Payments (owner rule): money moves only via Moneypenny -> IT Services -> Razorpay. The direct RazorpayX code (`src/adapters.js`, `src/payouts.js`, `src/razorpay.js`) is OFF by default (PAYOUT_MODE unset = mock) and must not be switched on without an owner decision.
 - Site signatures cover timestamp, method, path and body (1.0.6); Razorpay webhook dedupe uses the event type and entity id inside the signed body.
 - Sign-up (owner rule v1.3, 23 Nov 2026): no checkbox and no accept button anywhere; only plain Terms and Privacy links. `releasedAtIST` is UTC plus 5h30m.
+- Money rules rechecked 25 Nov 2026 (1.0.7): minimum 500 rupees; 80% after 7 days and the rest after 37 for money-back products (two ledger entries per commission, `-final` ref); pay days 15 and last day (`payouts.pay_on`, early approval needs `{early:true}` and is logged); joining bonus 500 rupees on the first sale within 30 days of approval (`bonus:<user>` ref, `users.approved_at`); team share off by default; payee name from `tenant_profile.payee_name`. Table and open questions: `docs/MONEY-RULES-RECHECK-2026-11-25.md`. Dashboard contract: `docs/DASHBOARD-OVER-MONEYPENNY-AND-MONOPOLY.md`.
+- The test harness (`test/helpers.js`) keeps the older plain behaviour by default; tests of the 14 Nov rules open it with `{ realDefaults: true }`.
+- Audit fixes 26 Nov 2026 (1.0.9): the joining bonus is paid to role `partner` only (staff roles and Refer and Earn get none; `src/sales.js`); `test/audit-round4.test.js` adds a second wording net that does not use the string reader, a no-tick scan over all of `public`, an AI-key-cannot-approve-early check, and a check that the default payee name is in no shipped file.
+- Audit fixes 25 Nov 2026 (1.0.8): wording scan test (`test/audit-round3.test.js`) fails on my/mine/your/yours in any string literal or HTML text except the exact sentence "Copy this link and paste in your AI to work."; no checkbox anywhere in the UI (login keeps-signed-in and the owner policy switches are selects); the joining bonus is protected by the UNIQUE `ledger.ref` and a refused second bonus means "already paid" (the sale is written again without it); a held joining bonus is described on the screen and in `payout_wait`.

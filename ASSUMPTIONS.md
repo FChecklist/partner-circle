@@ -11,24 +11,24 @@ affect future sales only.
 |---|---|
 | Independent product, integrated by API; sites need no change beyond one signed server call | `docs/INTEGRATION.md`, `src/app.js` |
 | Customers pay 100% up front; 30-day usage period; refund only for real users | the site decides and calls `/refunds`; `usage_verified` is recorded in the action log |
-| Partner is paid ~37 days after payment for Veridian + PROJEXA (30 + 7 buffer), 7 days for games / Townhall (0 + 7) | `sites.return_days`, `sites.buffer_days`; `eligible_at = paid_at + hold` |
+| Partner is paid 7 days after payment for games / Townhall (0 + 7). Money-back products (Veridian, PROJEXA, DPDP, MOM): 80% after 7 days, the last 20% after 37 days (30 money-back days + 7 buffer; the owner's note said 30, see docs/MONEY-RULES-RECHECK-2026-11-25.md question 1) | `sites.return_days`, `sites.buffer_days`, `sites.early_release_bps`; two ledger entries per commission, `eligible_at = paid_at + hold` for the last part |
 | Pay only when the sale is real **and** Razorpay confirmed the payment | `sales.rzp_status` must be `confirmed` before any commission is "available" |
 | No clawback after payout; "pay late instead" | refund after the commission was swept into a payout keeps the payout and flags the sale (`refund_after_maturity` column = "refunded after payout") for the owner |
 | Complete ledger; each payout and partner has its own trail | append-only hash-chained `ledger` + `audit_log` (DB triggers block UPDATE/DELETE; `/v1/admin/verify` re-hashes everything) |
 | AI operates the system, owner only approves | AI keys cannot hold `payouts.approve kyc.verify users.approve keys.manage policy.write schemes.settle schemes.activate`; AI-created staff are `pending` |
 | Partner verification at first payout: e-mail + PAN + UPI (India); abroad tax/ID + bank | `PUT /v1/me/kyc`, encrypted (AES-GCM, key `KYC_KEY`), shown masked, owner verifies |
-| All payouts only by IT SERVICES BY RAJAT AGARWAL through Razorpay | footer text; payout adapter is RazorpayX only; no other payee exists in code |
+| All payouts only by the payee on record (IT Services by Rajat Agarwal) through Razorpay | the name lives in `tenant_profile.payee_name` and is filled into the pages from `/v1/public/brand`, never written into code; the payout adapter is RazorpayX only and OFF unless `PAYOUT_MODE` is set; no other payee exists in code |
 | Refer and Earn: no e-mail to start sharing; verification before first payout | role `refer`: active at once, links only, e-mail + KYC enforced at payout request |
 | E-mail only through the existing Resend free-limit setup, never `tina@` | `resendMailer` is the only mail path and is off unless `RESEND_API_KEY` + `MAIL_FROM` are set |
 | Discount codes only where policy allows | `sites.discount_allowed`, `max_discount_bps`; refer members cannot create codes |
 
 ## Decisions I made (flag any you disagree with)
 
-1. **Rates are samples.** Commission 10-15% (games 12%), refer reward 3-5%, overrides 1.0% / 0.75% / 0.5% to Executive / Team Leader / Manager on a downline sale, max discount 5-10% on four sites, none elsewhere. Copied from the demo, which labels them "sample". Commission is on **net of tax** (`amount - tax`), after any discount.
+1. **Rates are samples, except Corporate Tambola.** Corporate Tambola is 25% for a Growth Partner and 25% for Refer and Earn (owner, 14 Nov 2026). Other products: commission 10-15%, refer reward 3-5%, max discount 10% on DPDP and MOM, no discount codes on the games and Townhall products. **Team share (override) is OFF (0%) until the owner decides yes or no and how much**; when switched on it is paid to Executive / Team Leader / Manager on a downline sale. Copied from the demo, which labels them "sample". Commission is on **net of tax** (`amount - tax`), after any discount.
 2. **Sales staff earn per-sale commission at the same site rate as a partner** when the sale is theirs; the upline overrides come on top. Salary, monthly target pay and accelerators from the demo are **not modelled** (HR/payroll, not a partner-commission function). Schemes (weekly / monthly / quarterly bonuses) are.
 3. **Attribution order:** discount code > registered prospect (14-day protection) > click id (30-day window) > earlier sign-up. First match wins; one partner per sale.
 4. **Self-referral** = buyer's e-mail hash equals the partner's own. Blocked sales are recorded with a reason and no commission. (Same-device / same-card checks need data the sites do not send.)
-5. **Minimum payout Rs 1,000**, one open payout per partner at a time, one payout sweeps *all* currently available entries (no partial amounts).
+5. **Minimum payout 500 rupees** (owner, 14 Nov 2026), payouts on the 15th and the last day of the month (a payout asked for earlier waits, and the owner can approve it early on purpose, which is logged), a joining bonus of 500 rupees with the first sale if it is paid within 30 days of approval, one open payout per partner at a time, one payout sweeps *all* currently available entries (no partial amounts).
 6. **TDS** is stored per payout as `tds_bps` (default 0%) and deducted from the amount sent. Whether Sec 194H applies, the rate, thresholds, PAN-less higher rate, GST on partner invoices and withholding for foreign payees are **CA questions** (owner's own instruction). Nothing here is tax advice.
 7. **INR only.** A sale in another currency is rejected (422). Foreign partners are paid in INR value or by hand (see below).
 8. **Non-India payees:** RazorpayX pays Indian UPI / IMPS only, so for a non-India partner `approve` records the payout as `processing` with provider `manual`; the owner pays by bank transfer outside the API and records it with `POST /v1/admin/payouts/:id/mark-paid {reference}`.

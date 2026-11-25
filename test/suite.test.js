@@ -88,7 +88,7 @@ test('dashboard: owner wording, real money beside credits, degraded mode (stale,
   h.fakes.mono.state.achievements[p.email] = { level: 3, badges: [{ name: 'First sale<script>' }] };
   let d = await dash(h, p);
   assert.equal(d.moneypenny.status, 'live');
-  assert.equal(d.moneypenny.lines.owned, '1,250 Moneypenny (credits) owned = US$12.50 (about Rs 1,037.50)');
+  assert.equal(d.moneypenny.lines.owned, '1,250 Moneypenny (credits) owned = US$12.50 (about ₹1,037.50)');
   assert.equal(d.moneypenny.lines.rate, '100 Moneypenny = 1 US$');
   assert.match(d.moneypenny.lines.convert, /You can convert 625 Moneypenny \(US\$6\.25\) to money/);
   assert.equal(d.monopoly.targets[0].name, 'bSell 5/b', 'markup characters removed');

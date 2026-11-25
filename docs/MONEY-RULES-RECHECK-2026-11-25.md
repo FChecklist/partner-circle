@@ -43,7 +43,7 @@ These are in the owner's v3 design but are new products, not rule corrections. T
 3. **Team share: yes or no, and how much?** Off until you decide. Also: is the sales team paid out of the 25%, or on top?
 4. **Discount codes on DPDP and MOM.** The v3 design shows none. They are still on at 10% until you say.
 5. **Rates for every product other than Corporate Tambola** and the 25/30/35 levels. All other rates are still samples.
-6. **Joining bonus on a money-back product**: it is released with the last part (day 37), not the first. Also, is there a cap on the total cost of bonuses?
+6. **Joining bonus on a money-back product**: it is released with the last part (day 37), not the first. Also, is there a cap on the total cost of bonuses? And if the first sale is refunded, the bonus goes back with it and is not offered again on a later sale (the bonus is once per person); should it move to the next sale instead?
 7. **Deal protection:** a registered prospect stays the seller's for 14 days here; the games count a click for 30 days (review item 10). Make it 30?
 8. **Payee name record.** The record starts as "IT Services by Rajat Agarwal". Confirm the exact spelling and capitals you want on the pages.
 9. **TDS.** Payouts still carry a placeholder 0% until a CA gives the rate.

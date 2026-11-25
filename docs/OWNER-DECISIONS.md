@@ -22,7 +22,7 @@ The builder applied the decisions already given on 14 Nov (minimum 500 rupees, 8
 3. Team share: yes or no, how much, and is it paid out of the 25% or on top?
 4. Discount codes on DPDP and MOM (10% sample today): keep or remove?
 5. Rate cards for every product other than Corporate Tambola; the 25/30/35 levels and the Growth Partner incentives (not built).
-6. Joining bonus on a money-back product is released with the last part (day 37); is that right, and is there a cap on total bonus cost?
+6. Joining bonus on a money-back product is released with the last part (day 37); is that right, and is there a cap on total bonus cost? Also: if the first sale is refunded the bonus goes back with it and is not offered again on a later sale (built that way because the bonus is once per person); should it move to the next sale instead?
 7. Deal protection: 14 days (built) or 30 days (the games' rule)?
 8. The exact spelling of the payee name on the pages (it is a record now: `PUT /v1/admin/tenant { "payee_name": ... }`).
 9. TDS rate (placeholder 0%) and the CA's answer.
